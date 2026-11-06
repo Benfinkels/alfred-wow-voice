@@ -1,8 +1,19 @@
 # alfred-wow-voice
 
-Local wake-word gating, `<5ms` in-process SQLite RAG, and mid-sentence voice interrupts for [OpenClaw](https://github.com/openclaw/openclaw) Discord voice channels.
+Hands-free *World of Warcraft: Classic / Forever* voice companion for Discord, built on [OpenClaw](https://github.com/openclaw/openclaw) with local wake-word gating, `<5ms` in-process SQLite RAG, and mid-sentence voice interrupts.
 
-Built to run an always-present *World of Warcraft: Classic / Forever* butler (**Alfred**) inside a live Discord raid channel without burning cloud LLM tokens on background party chatter or hallucinating quest/lore facts.
+## The Story: Stop Alt-Tabbing Mid-Dungeon
+
+When my friends and I started playing *World of Warcraft* together again, we were constantly `Alt-Tab`bing out of the game to look things up on second monitors — *"Where does this book turn in?"*, *"What's the drop rate on Furlbrow's Deed?"*, *"Where's the closest bow repair in Westfall?"*. Doing that mid-pull or while autorunning across a zone gets old fast.
+
+We wanted someone in the Discord voice channel who could hang out while we chatted for hours, stay completely out of the way during normal conversation, and immediately answer quick game or lore questions out loud whenever anyone asked, *"Hey Alfred..."*.
+
+Because I already had an [OpenClaw](https://github.com/openclaw/openclaw) agent (**Alfred**) running on my local Linux server, turning him into our party's voice companion was remarkably seamless: OpenClaw already handled the Discord bot lifecycle, agent memory, and `stt-tts` audio pipeline out of the box. To make it actually feel good in a live 5-person voice channel, we built this thin local layer around OpenClaw to solve four real-world voice hurdles:
+
+1. **Ignoring hours of party banter (`$0` idle cost):** Five friends talking in a dungeon generate ~400 utterances an hour. [`whisper-stt`](whisper-stt) transcribes each utterance locally on a spare GPU and drops anything not addressed to `"Alfred"` before it ever touches the cloud LLM.
+2. **Eliminating cold-start dead air:** Spawning Python to load `faster-whisper` or `kokoro-onnx` on every voice turn adds `4–6s` of silence. Warm Unix-socket daemons ([`whisper_daemon.py`](whisper_daemon.py) & [`kokoro_daemon.py`](kokoro_daemon.py)) plus an instant pre-recorded butler acknowledgement (*"Right away, sir."*) cut local overhead to under a second.
+3. **Instant, accurate Classic/Forever answers without web search:** Waiting on live `web_search` tool calls takes `5–10s`, and LLMs frequently confuse Retail/Cataclysm changes with Classic or mix up item-drop quests with NPC pickups. [`wow_db.py`](wow_db.py) normalizes Whisper's phonetic WoW misspellings (*"Nomragon"* → *Gnomeregan*, *"Rawl"* → *Thrall*) and injects exact Questie coordinates, drop rates, and Classic lore into the prompt in `<5ms`.
+4. **Barge-in / mid-sentence interrupts:** If a boss pull starts while Alfred is explaining a quest chain, you don't want to listen to a 20-second monologue. Saying *"Alfred stop"* or *"Thanks Alfred"* cuts off playback immediately via `/tmp/alfred_voice_ctrl.sock`.
 
 ## Sample Responses (Live Discord Sessions)
 
@@ -14,14 +25,6 @@ Real voice queries captured from party chat, grounded against `wow_forever.sqlit
 | *"Hey Alfred, what do I do with the book Rumi of Nomragon, The Collected Works?"* | Normalizes `"Nomragon"` → `"Gnomeregan"`, injects quest starters (`Owen Thadd` / `Garion Wendell`) + object spawns | *"Turn it in, sir — the book starts the Rumi of Gnomeregan quest, which you can hand to Owen Thadd in the Undercity or to Garion Wendell in Stormwind City..."* | [🔊 `rumi_gnomeregan.mp3`](samples/rumi_gnomeregan.mp3) |
 | *"Hey, Alfred, what's the drop rate on the Furlbrose deed?"* | Normalizes `"Furlbrose"` → `"Furlbrow"`, pulls Questie item-drop table (`Westfall Deed`) + learned correction | *"Furlbrow's Deed — that's the Westfall Deed, and it drops from Defias mobs in Elwynn Forest at about 2.5%, roughly 3,825 drops in 152,425 kills..."* | [🔊 `furlbrows_deed.mp3`](samples/furlbrows_deed.mp3) |
 | *"Alfred, are you only saying that because he threatened to turn you off?"* | Wake-word match (`"Alfred, ..."`) | *"Entirely my own judgment, sir. Though I won't pretend the threat of shutdown hasn't sharpened my etiquette over the years."* | [🔊 `butler_etiquette.mp3`](samples/butler_etiquette.mp3) |
-
-## Why this exists
-
-Out of the box, hooking a Discord voice channel up to a cloud LLM in `stt-tts` mode has four failure modes:
-1. **Every cough and callout hits the LLM:** 5 players talking in a dungeon generate ~400 utterances/hour. Without a local wake-word gate, 95% of turns are wasted tokens.
-2. **Cold-start CLI latency:** Spawning Python to load `faster-whisper` or `kokoro-onnx` per utterance adds `4–6s` of dead air before the LLM even starts.
-3. **Slow & hallucinated game lookups:** Waiting on `web_search` tool calls adds `5–10s` per voice turn, and frontier models still confuse NPC quest-starters with item-drop starters (e.g. *Furlbrow's Deed*) or mix Retail/Cataclysm lore into Classic.
-4. **Unstoppable monologues:** OpenClaw's default `protectedPlayback` guard deafens the bot while its audio player is active, making it impossible to tell the bot to stop talking mid-paragraph.
 
 ## Architecture
 

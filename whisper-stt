@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+"""OpenClaw STT CLI: prints the transcript of argv[1] via the warm whisper daemon.
+--wake: print nothing unless the transcript addresses Alfred (keeps raid chatter away from the LLM).
+shortcut: tools.media.audio is global, so --wake also filters Discord DM voice notes; scope it if other audio channels get added."""
+import json, os, re, socket, sys, time
+
+WAKE = re.compile(r"\b(hey[\s,]+)?al(f|v)(red|rid|ret)\b", re.I)
+FOLLOWUP = re.compile(r"^\s*(?:please\s+|can you\s+)?(?:give me\s+)?(?:more details?|more info|elaborate|go deeper|short answer|keep it short)\b", re.I)
+INTERRUPT = re.compile(
+    r"\b(?:"
+    r"(?:hey[\s,]+)?al(f|v)(red|rid|ret)[\s,!.?]*(?:please\s+)?(?:stop(?:\s+talking)?|shut\s+up|quiet|be\s+quiet|silence|hush|enough|that'?s\s+enough|that\s+is\s+enough|pause|cancel|abort|never\s*mind|forget\s+it|thank\s+you|thanks|got\s+it|we\s+got\s+it|that'?ll\s+do|that\s+will\s+do)\b"
+    r"|(?:stop(?:\s+talking)?|shut\s+up|quiet|be\s+quiet|silence|hush|enough|that'?s\s+enough|that\s+is\s+enough|pause|cancel|abort|never\s*mind|forget\s+it|thank\s+you|thanks|got\s+it|we\s+got\s+it|that'?ll\s+do|that\s+will\s+do)[\s,!.?]*(?:please[\s,!.?]*)?al(f|v)(red|rid|ret)\b"
+    r")",
+    re.I,
+)
+BARE_INTERRUPT = re.compile(
+    r"^\s*(?:please\s+)?(?:stop\s+talking|that'?s\s+enough|that\s+is\s+enough|shut\s+up|be\s+quiet|never\s*mind|stop\s+alfred|alfred\s+stop)[\s,!.?]*$",
+    re.I,
+)
+NON_QUESTION = re.compile(
+    r"^\s*(?:we'?re\s+|i'?m\s+|still\s+)?(?:waiting on you|thank you|thanks|good job|good answer|nice job|well done|shut up|never\s*mind)[\s,!.?]*al(f|v)(red|rid|ret)[\s,!.?]*$",
+    re.I,
+)
+THIRD_PERSON = re.compile(
+    r"\b(?:"
+    r"(?:kick|kicked|kicking|mute|muted|muting|unmute|deafen|deafened|ask|asked|asking|tell|told|hear|heard|about|with)\s+al(f|v)(red|rid|ret)\b"
+    r"|have\s+al(f|v)(red|rid|ret)\s+(?:muted|deafened|turned|on|off)\b"
+    r"|what\s+(?:does|is\s+it\s+that)\s+al(f|v)(red|rid|ret)\s+do(?:es)?\b"
+    r"|(?:his|my|the)\s+name(?:'?s|\s+is)\s+al(f|v)(red|rid|ret)\b"
+    r"|al(f|v)(red|rid|ret)\s+tried\s+to\b"
+    r")",
+    re.I,
+)
+
+QUOTA_PATH = os.environ.get("VOICE_QUOTA_PATH", os.path.expanduser("~/.openclaw/logs/voice-quota.json"))
+LOG_PATH = os.environ.get("VOICE_AUDIT_LOG", os.path.expanduser("~/.openclaw/logs/voice-audit.jsonl"))
+STT_SOCK = os.environ.get("WHISPER_SOCK", "/tmp/whisper_stt.sock")
+CTRL_SOCK = os.environ.get("VOICE_CTRL_SOCK", "/tmp/alfred_voice_ctrl.sock")
+DAILY_TURNS = int(os.environ.get("VOICE_DAILY_TURNS", "120"))
+MIN_GAP_S = 5
+FOLLOWUP_WINDOW_S = 45
+
+
+def classify(text: str, playing: bool = False) -> str:
+    if INTERRUPT.search(text):
+        return "INTERRUPT"
+    if BARE_INTERRUPT.search(text) and playing:
+        return "BARE_INTERRUPT"
+    woke = bool(WAKE.search(text)) and not bool(NON_QUESTION.search(text)) and not bool(THIRD_PERSON.search(text))
+    return "WAKE" if woke else "IGNORE"
+
+
+def voice_ctrl(cmd: str) -> bool:
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(0.2)
+        s.connect(CTRL_SOCK)
+        s.sendall((cmd + "\n").encode())
+        return json.loads(s.makefile().readline()).get("playing", False)
+    except Exception:
+        return False
+
+
+def recent_wake() -> bool:
+    try:
+        return time.time() - json.load(open(QUOTA_PATH)).get("last", 0) < FOLLOWUP_WINDOW_S
+    except (OSError, ValueError):
+        return False
+
+
+def main():
+    args = [a for a in sys.argv[1:] if a != "--wake"]
+    if not args:
+        sys.exit("usage: whisper-stt [--wake] <audio>")
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(30)
+    s.connect(STT_SOCK)
+    s.sendall((json.dumps({"path": args[0]}) + "\n").encode())
+    res = json.loads(s.makefile().readline())
+    if "error" in res:
+        sys.exit(res["error"])
+    text = res["text"]
+    action = classify(text, playing=bool(BARE_INTERRUPT.search(text)) and voice_ctrl("status"))
+    if action in ("INTERRUPT", "BARE_INTERRUPT"):
+        was_playing = voice_ctrl("stop")
+        try:
+            os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+            with open(LOG_PATH, "a") as f:
+                f.write(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "kind": "stt", "text": text, "woke": False, "interrupt": True, "was_playing": was_playing, "ms": res.get("ms")}) + "\n")
+        except OSError:
+            pass
+        return
+    woke = action == "WAKE"
+    if not woke and FOLLOWUP.search(text) and recent_wake():
+        woke = True
+        text = f"Hey Alfred, {text}"
+    if woke:
+        voice_ctrl("stop")  # barge-in: cut off any ongoing speech before starting new turn
+    if woke and os.path.exists(LOG_PATH):
+        try:
+            recent_lines = [json.loads(l) for l in open(LOG_PATH).read().splitlines()[-15:] if l.strip()]
+            for entry in reversed(recent_lines):
+                if entry.get("kind") == "tts" or entry.get("interrupt"):
+                    break
+                if entry.get("kind") == "stt" and entry.get("woke"):
+                    if time.time() - json.load(open(QUOTA_PATH)).get("last", 0) < 15:
+                        woke = False
+                    break
+        except Exception:
+            pass
+    ctx = ""
+    if woke:
+        try:
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            import wow_db
+            text = wow_db.normalize_stt(text)
+            ctx = wow_db.auto_context(text)
+        except Exception:
+            ctx = ""
+    db_rows = max(0, len(ctx.splitlines()) - 1) if ctx else 0
+    try:
+        os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+        with open(LOG_PATH, "a") as f:
+            f.write(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "kind": "stt", "text": text, "woke": woke, "ms": res.get("ms"), "db_rows": db_rows}) + "\n")
+    except OSError:
+        pass
+    if "--wake" in sys.argv and not woke:
+        return
+    if "--wake" in sys.argv and not under_quota():
+        return
+    print(f"{text}\n\n{ctx}" if ctx else text)
+
+
+# shortcut: one global voice budget (STT can't see who spoke); move to per-speaker if one friend hogs it.
+def under_quota() -> bool:
+    today, now = time.strftime("%Y-%m-%d"), time.time()
+    try:
+        q = json.load(open(QUOTA_PATH))
+    except (OSError, ValueError):
+        q = {}
+    if q.get("day") != today:
+        q = {"day": today, "count": 0, "last": 0}
+    if q["count"] >= DAILY_TURNS or now - q["last"] < MIN_GAP_S:
+        return False
+    q["count"] += 1
+    q["last"] = now
+    json.dump(q, open(QUOTA_PATH, "w"))
+    return True
+
+
+if __name__ == "__main__":
+    main()

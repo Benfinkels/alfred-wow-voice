@@ -1,0 +1,10 @@
+#!/usr/bin/env python3
+"""Control active Discord voice playback/residency: voice-ctrl [status | stop | join <guildId> <channelId>]."""
+import os, socket, sys
+
+cmd = " ".join(sys.argv[1:]) or "status"
+with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+    s.settimeout(10)
+    s.connect(os.environ.get("VOICE_CTRL_SOCK", "/tmp/alfred_voice_ctrl.sock"))
+    s.sendall((cmd + "\n").encode())
+    print(s.makefile().readline().strip())

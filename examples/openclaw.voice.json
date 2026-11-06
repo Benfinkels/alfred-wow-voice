@@ -1,0 +1,42 @@
+{
+  "tools": {
+    "media": {
+      "audio": {
+        "enabled": true,
+        "models": [
+          {
+            "type": "cli",
+            "command": "/path/to/whisper-stt",
+            "args": ["--wake", "{{MediaPath}}"]
+          }
+        ]
+      }
+    }
+  },
+  "tts": {
+    "provider": "tts-local-cli",
+    "localCli": {
+      "command": "/path/to/kokoro-tts",
+      "args": ["--output", "{{OutputPath}}", "--voice", "bm_george", "--speed", "1.05"]
+    }
+  },
+  "channels": {
+    "discord": {
+      "enabled": true,
+      "voice": {
+        "enabled": true,
+        "mode": "stt-tts",
+        "tts": {
+          "provider": "tts-local-cli"
+        },
+        "captureSilenceGraceMs": 700,
+        "allowedChannels": [
+          {
+            "guildId": "YOUR_DISCORD_GUILD_ID",
+            "channelId": "YOUR_VOICE_CHANNEL_ID"
+          }
+        ]
+      }
+    }
+  }
+}

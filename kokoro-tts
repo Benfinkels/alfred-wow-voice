@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+"""Kokoro-82M TTS CLI for OpenClaw: sanitizes text for speech, logs self-corrections, and calls warm daemon."""
+import argparse, json, os, re, socket, sys, time
+
+SOCKET_PATH = os.environ.get("KOKORO_SOCK", "/tmp/kokoro_tts.sock")
+KOKORO_DIR = os.environ.get("KOKORO_DIR", os.path.expanduser("~/.openclaw/workspace/kokoro"))
+MODEL_PATH = os.path.join(KOKORO_DIR, "kokoro-v1.0.onnx")
+VOICES_PATH = os.path.join(KOKORO_DIR, "voices-v1.0.bin")
+AUDIT_LOG = os.environ.get("VOICE_AUDIT_LOG", os.path.expanduser("~/.openclaw/logs/voice-audit.jsonl"))
+CORRECTIONS_LOG = os.environ.get("VOICE_CORRECTIONS_LOG", os.path.expanduser("~/.openclaw/logs/corrections.jsonl"))
+
+SELF_CORR_RE = re.compile(
+    r"\b(you'?re right|you are right|my mistake|i stand corrected|earlier answer|i misspoke|conflated|that'?s on me)\b",
+    re.I,
+)
+USER_CORR_RE = re.compile(
+    r"\b(not correct|that'?s wrong|you'?re wrong|incorrect|actually it'?s|no[,\s]+it'?s)\b",
+    re.I,
+)
+
+
+def run_socket_client(text: str, output: str, voice: str, speed: float) -> bool:
+    if not os.path.exists(SOCKET_PATH):
+        return False
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(15.0)
+            client.connect(SOCKET_PATH)
+            payload = json.dumps({"text": text, "output": output, "voice": voice, "speed": speed}) + "\n"
+            client.sendall(payload.encode("utf-8"))
+            res = json.loads(client.recv(4096).decode("utf-8").strip())
+            return res.get("status") == "ok"
+    except Exception:
+        return False
+
+
+def run_in_process(text: str, output: str, voice: str, speed: float):
+    import onnxruntime as rt
+    import soundfile as sf
+    from kokoro_onnx import Kokoro
+
+    opts = rt.SessionOptions()
+    opts.intra_op_num_threads = 6
+    sess = rt.InferenceSession(MODEL_PATH, sess_options=opts, providers=["CPUExecutionProvider"])
+    kokoro = Kokoro(MODEL_PATH, VOICES_PATH)
+    kokoro.sess = sess
+    samples, sr = kokoro.create(text, voice=voice, speed=speed, lang="en-us")
+    sf.write(output, samples, sr)
+
+
+def audit(**rec):
+    try:
+        os.makedirs(os.path.dirname(AUDIT_LOG), exist_ok=True)
+        ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+        raw_txt = rec.get("raw", "")
+        if os.path.exists(AUDIT_LOG):
+            recent = [json.loads(l) for l in open(AUDIT_LOG).read().splitlines()[-25:] if l.strip()]
+            woke_stts = [r for r in recent if r.get("kind") == "stt" and r.get("woke")]
+            tts_turns = [r for r in recent if r.get("kind") == "tts"]
+            last_stt = woke_stts[-1]["text"] if woke_stts else ""
+            if SELF_CORR_RE.search(raw_txt) or USER_CORR_RE.search(last_stt):
+                prev_q = woke_stts[-2]["text"] if len(woke_stts) >= 2 else ""
+                wrong_a = tts_turns[-1].get("spoken", "") if tts_turns else ""
+                corr_entry = {
+                    "ts": ts,
+                    "question": prev_q,
+                    "wrong_answer": wrong_a,
+                    "user_correction": last_stt,
+                    "corrected_answer": rec.get("spoken", raw_txt),
+                }
+                with open(CORRECTIONS_LOG, "a") as cf:
+                    cf.write(json.dumps(corr_entry) + "\n")
+                rec["corrected"] = True
+        with open(AUDIT_LOG, "a") as f:
+            f.write(json.dumps({"ts": ts, **rec}) + "\n")
+    except OSError:
+        pass
+
+
+def speakable(text: str) -> str:
+    """Strip URLs, citations, and markdown; normalize numbers so Kokoro doesn't pause on commas/dots."""
+    t = re.sub(r"\[([^\]]+)\]\((?:https?://)?[^)]+\)", r"\1", text)
+    t = re.sub(r"https?://\S+|www\.\S+|\b\S+\.(?:com|net|org|gg|io)\S*", "", t)
+    t = re.sub(r"\[\^?\d+(?:[,\-–]\s*\d+)*\]|【[^】]*】|\(\s*\d+\s*\)", "", t)
+    t = re.sub(r"(?<=\d),(?=\d{3}\b)", "", t)
+    t = re.sub(r"~", "about ", t)
+    t = re.sub(r"\b(\d+)\s*[-–]\s*(\d+)\s*(?:%|percent\b)", r"\1 to \2 percent", t)
+    t = re.sub(r"\b(\d+)\.0\b", r"\1", t)
+    t = re.sub(r"\b(\d+)\.(\d+)\b", r"\1 point \2", t)
+    t = re.sub(r"(\d)\s*%", r"\1 percent", t)
+    t = re.sub(r"[*_`#>|~]+", "", t)
+    t = re.sub(r"^\s*[-•]\s+|^\s*\d+[.)]\s+", "", t, flags=re.M)
+    t = re.sub(r"\s+", " ", t).strip()
+    return re.sub(r"\s+([,.;:!?])", r"\1", t)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Kokoro-82M TTS CLI for OpenClaw")
+    parser.add_argument("--text", default="")
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--voice", default="bm_george")
+    parser.add_argument("--speed", type=float, default=1.05)
+    args = parser.parse_args()
+
+    text = args.text.strip() or sys.stdin.read().strip()
+    if not text:
+        return
+    raw, text = text, speakable(text)
+    audit(kind="tts", raw=raw, spoken=text)
+    if not text:
+        return
+    if run_socket_client(text, os.path.abspath(args.output), args.voice, args.speed):
+        return
+    run_in_process(text, args.output, args.voice, args.speed)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,11 @@
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.db
+*.jsonl
+*.wav
+*.sock
+*.bak
+*.orig
+.env
+__pycache__/

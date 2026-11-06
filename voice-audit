@@ -1,0 +1,30 @@
+#!/usr/bin/env python3
+"""Pretty-print the Discord voice audit log: voice-audit [N] or voice-audit --corrections."""
+import json, os, sys
+
+AUDIT_LOG = os.environ.get("VOICE_AUDIT_LOG", os.path.expanduser("~/.openclaw/logs/voice-audit.jsonl"))
+CORRECTIONS_LOG = os.environ.get("VOICE_CORRECTIONS_LOG", os.path.expanduser("~/.openclaw/logs/corrections.jsonl"))
+
+if "--corrections" in sys.argv:
+    if not os.path.exists(CORRECTIONS_LOG):
+        print("No corrections logged yet.")
+        sys.exit(0)
+    for l in open(CORRECTIONS_LOG).read().splitlines():
+        if not l.strip():
+            continue
+        c = json.loads(l)
+        print(f"[{c['ts']}]\n  Q:     {c.get('question', '')}\n  WRONG: {c.get('wrong_answer', '')}\n  USER:  {c.get('user_correction', '')}\n  FIXED: {c.get('corrected_answer', '')}\n")
+    sys.exit(0)
+
+n = int(sys.argv[1]) if len(sys.argv) > 1 else 30
+for l in open(AUDIT_LOG).read().splitlines()[-n:]:
+    r = json.loads(l)
+    if r["kind"] == "stt":
+        icon = "⏹" if r.get("interrupt") else ("✔" if r.get("woke") else "·")
+        db_tag = f" [+{r['db_rows']} DB]" if r.get("db_rows") else (" [INTERRUPT]" if r.get("interrupt") else "")
+        print(f"{r['ts']}  HEARD {icon} ({r.get('ms')}ms){db_tag}: {r['text']}")
+    else:
+        ctag = " [CORRECTION LOGGED]" if r.get("corrected") else ""
+        print(f"{r['ts']}  SPOKE{ctag}: {r['spoken']}")
+        if r.get("raw") != r.get("spoken"):
+            print(f"{' ' * 21}raw:  {r.get('raw')}")

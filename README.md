@@ -4,6 +4,17 @@ Local wake-word gating, `<5ms` in-process SQLite RAG, and mid-sentence voice int
 
 Built to run an always-present *World of Warcraft: Classic / Forever* butler (**Alfred**) inside a live Discord raid channel without burning cloud LLM tokens on background party chatter or hallucinating quest/lore facts.
 
+## Sample Responses (Live Discord Sessions)
+
+Real voice queries captured from party chat, grounded against `wow_forever.sqlite` in `<5ms`, and synthesized locally with `Kokoro-82M` (`bm_george` @ `1.12x`):
+
+| Player Voice Query (Whisper STT) | Local Pipeline Action | Alfred's Spoken Response | Audio |
+| :--- | :--- | :--- | :--- |
+| *"Hey Alfred, what is the closest vendor in Loch Modan when I'm near Iron Band's excavation site?"* | Ranks Loch Modan `<Tradesman>`, `<Metalsmith>`, and `<General Supplies>` NPCs by spawn coordinates | *"The dig site in Loch Modan sits right around 35.6, 48.9, and Drac Roughcut the Tradesman is standing essentially on it at 35.6, 49.1 — that's your closest vendor for general goods and repairs..."* | [🔊 `loch_modan_vendor.mp3`](samples/loch_modan_vendor.mp3) |
+| *"Hey Alfred, what do I do with the book Rumi of Nomragon, The Collected Works?"* | Normalizes `"Nomragon"` → `"Gnomeregan"`, injects quest starters (`Owen Thadd` / `Garion Wendell`) + object spawns | *"Turn it in, sir — the book starts the Rumi of Gnomeregan quest, which you can hand to Owen Thadd in the Undercity or to Garion Wendell in Stormwind City..."* | [🔊 `rumi_gnomeregan.mp3`](samples/rumi_gnomeregan.mp3) |
+| *"Hey, Alfred, what's the drop rate on the Furlbrose deed?"* | Normalizes `"Furlbrose"` → `"Furlbrow"`, pulls Questie item-drop table (`Westfall Deed`) + learned correction | *"Furlbrow's Deed — that's the Westfall Deed, and it drops from Defias mobs in Elwynn Forest at about 2.5%, roughly 3,825 drops in 152,425 kills..."* | [🔊 `furlbrows_deed.mp3`](samples/furlbrows_deed.mp3) |
+| *"Alfred, are you only saying that because he threatened to turn you off?"* | Wake-word match (`"Alfred, ..."`) | *"Entirely my own judgment, sir. Though I won't pretend the threat of shutdown hasn't sharpened my etiquette over the years."* | [🔊 `butler_etiquette.mp3`](samples/butler_etiquette.mp3) |
+
 ## Why this exists
 
 Out of the box, hooking a Discord voice channel up to a cloud LLM in `stt-tts` mode has four failure modes:

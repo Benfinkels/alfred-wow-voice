@@ -2,33 +2,39 @@
 """OpenClaw STT CLI: prints the transcript of argv[1] via the warm whisper daemon.
 --wake: print nothing unless the transcript addresses Alfred (keeps raid chatter away from the LLM).
 shortcut: tools.media.audio is global, so --wake also filters Discord DM voice notes; scope it if other audio channels get added."""
-import json, os, re, socket, sys, time
+import json, os, re, socket, subprocess, sys, time
 
-WAKE = re.compile(r"\b(hey[\s,]+)?al(f|v)(red|rid|ret)\b", re.I)
+WAKE_NAME = os.environ.get("VOICE_WAKE_NAME", "Alfred")
+WAKE_PAT = os.environ.get(
+    "VOICE_WAKE_PATTERN",
+    r"al(f|v)(red|rid|ret)" if WAKE_NAME.lower() == "alfred" else re.escape(WAKE_NAME),
+)
+
+WAKE = re.compile(rf"\b(hey[\s,]+)?{WAKE_PAT}\b", re.I)
 FOLLOWUP = re.compile(r"^\s*(?:please\s+|can you\s+)?(?:give me\s+)?(?:more details?|more info|elaborate|go deeper|short answer|keep it short)\b", re.I)
 INTERRUPT = re.compile(
-    r"\b(?:"
-    r"(?:hey[\s,]+)?al(f|v)(red|rid|ret)[\s,!.?]*(?:please\s+)?(?:stop(?:\s+talking)?|shut\s+up|quiet|be\s+quiet|silence|hush|enough|that'?s\s+enough|that\s+is\s+enough|pause|cancel|abort|never\s*mind|forget\s+it|thank\s+you|thanks|got\s+it|we\s+got\s+it|that'?ll\s+do|that\s+will\s+do)\b"
-    r"|(?:stop(?:\s+talking)?|shut\s+up|quiet|be\s+quiet|silence|hush|enough|that'?s\s+enough|that\s+is\s+enough|pause|cancel|abort|never\s*mind|forget\s+it|thank\s+you|thanks|got\s+it|we\s+got\s+it|that'?ll\s+do|that\s+will\s+do)[\s,!.?]*(?:please[\s,!.?]*)?al(f|v)(red|rid|ret)\b"
-    r")",
+    rf"\b(?:"
+    rf"(?:hey[\s,]+)?{WAKE_PAT}[\s,!.?]*(?:please\s+)?(?:stop(?:\s+talking)?|shut\s+up|quiet|be\s+quiet|silence|hush|enough|that'?s\s+enough|that\s+is\s+enough|pause|cancel|abort|never\s*mind|forget\s+it|thank\s+you|thanks|got\s+it|we\s+got\s+it|that'?ll\s+do|that\s+will\s+do)\b"
+    rf"|(?:stop(?:\s+talking)?|shut\s+up|quiet|be\s+quiet|silence|hush|enough|that'?s\s+enough|that\s+is\s+enough|pause|cancel|abort|never\s*mind|forget\s+it|thank\s+you|thanks|got\s+it|we\s+got\s+it|that'?ll\s+do|that\s+will\s+do)[\s,!.?]*(?:please[\s,!.?]*)?{WAKE_PAT}\b"
+    rf")",
     re.I,
 )
 BARE_INTERRUPT = re.compile(
-    r"^\s*(?:please\s+)?(?:stop\s+talking|that'?s\s+enough|that\s+is\s+enough|shut\s+up|be\s+quiet|never\s*mind|stop\s+alfred|alfred\s+stop)[\s,!.?]*$",
+    rf"^\s*(?:please\s+)?(?:stop\s+talking|that'?s\s+enough|that\s+is\s+enough|shut\s+up|be\s+quiet|never\s*mind|stop\s+{WAKE_PAT}|{WAKE_PAT}\s+stop)[\s,!.?]*$",
     re.I,
 )
 NON_QUESTION = re.compile(
-    r"^\s*(?:we'?re\s+|i'?m\s+|still\s+)?(?:waiting on you|thank you|thanks|good job|good answer|nice job|well done|shut up|never\s*mind)[\s,!.?]*al(f|v)(red|rid|ret)[\s,!.?]*$",
+    rf"^\s*(?:we'?re\s+|i'?m\s+|still\s+)?(?:waiting on you|thank you|thanks|good job|good answer|nice job|well done|shut up|never\s*mind)[\s,!.?]*{WAKE_PAT}[\s,!.?]*$",
     re.I,
 )
 THIRD_PERSON = re.compile(
-    r"\b(?:"
-    r"(?:kick|kicked|kicking|mute|muted|muting|unmute|deafen|deafened|ask|asked|asking|tell|told|hear|heard|about|with)\s+al(f|v)(red|rid|ret)\b"
-    r"|have\s+al(f|v)(red|rid|ret)\s+(?:muted|deafened|turned|on|off)\b"
-    r"|what\s+(?:does|is\s+it\s+that)\s+al(f|v)(red|rid|ret)\s+do(?:es)?\b"
-    r"|(?:his|my|the)\s+name(?:'?s|\s+is)\s+al(f|v)(red|rid|ret)\b"
-    r"|al(f|v)(red|rid|ret)\s+tried\s+to\b"
-    r")",
+    rf"\b(?:"
+    rf"(?:kick|kicked|kicking|mute|muted|muting|unmute|deafen|deafened|ask|asked|asking|tell|told|hear|heard|about|with)\s+{WAKE_PAT}\b"
+    rf"|have\s+{WAKE_PAT}\s+(?:muted|deafened|turned|on|off)\b"
+    rf"|what\s+(?:does|is\s+it\s+that)\s+{WAKE_PAT}\s+do(?:es)?\b"
+    rf"|(?:his|my|the)\s+name(?:'?s|\s+is)\s+{WAKE_PAT}\b"
+    rf"|{WAKE_PAT}\s+tried\s+to\b"
+    rf")",
     re.I,
 )
 
@@ -36,6 +42,8 @@ QUOTA_PATH = os.environ.get("VOICE_QUOTA_PATH", os.path.expanduser("~/.openclaw/
 LOG_PATH = os.environ.get("VOICE_AUDIT_LOG", os.path.expanduser("~/.openclaw/logs/voice-audit.jsonl"))
 STT_SOCK = os.environ.get("WHISPER_SOCK", "/tmp/whisper_stt.sock")
 CTRL_SOCK = os.environ.get("VOICE_CTRL_SOCK", "/tmp/alfred_voice_ctrl.sock")
+INTERRUPT_CMD = os.environ.get("VOICE_INTERRUPT_CMD", "")
+CONTEXT_CMD = os.environ.get("VOICE_CONTEXT_CMD", "")
 DAILY_TURNS = int(os.environ.get("VOICE_DAILY_TURNS", "120"))
 MIN_GAP_S = 5
 FOLLOWUP_WINDOW_S = 45
@@ -51,6 +59,12 @@ def classify(text: str, playing: bool = False) -> str:
 
 
 def voice_ctrl(cmd: str) -> bool:
+    if cmd == "stop" and INTERRUPT_CMD:
+        try:
+            subprocess.run(INTERRUPT_CMD, shell=True, timeout=2, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+        except Exception:
+            return False
     try:
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         s.settimeout(0.2)
@@ -93,7 +107,7 @@ def main():
     woke = action == "WAKE"
     if not woke and FOLLOWUP.search(text) and recent_wake():
         woke = True
-        text = f"Hey Alfred, {text}"
+        text = f"Hey {WAKE_NAME}, {text}"
     if woke:
         voice_ctrl("stop")  # barge-in: cut off any ongoing speech before starting new turn
     if woke and os.path.exists(LOG_PATH):
@@ -111,10 +125,13 @@ def main():
     ctx = ""
     if woke:
         try:
-            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-            import wow_db
-            text = wow_db.normalize_stt(text)
-            ctx = wow_db.auto_context(text)
+            if CONTEXT_CMD:
+                ctx = subprocess.check_output(CONTEXT_CMD, input=text, shell=True, text=True, timeout=3).strip()
+            else:
+                sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+                import wow_db
+                text = wow_db.normalize_stt(text)
+                ctx = wow_db.auto_context(text)
         except Exception:
             ctx = ""
     db_rows = max(0, len(ctx.splitlines()) - 1) if ctx else 0

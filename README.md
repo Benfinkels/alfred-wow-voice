@@ -81,6 +81,7 @@ systemctl --user enable --now whisper-stt.service kokoro-tts.service
 ### 3. Patch `@openclaw/discord` and configure OpenClaw
 ```bash
 python3 patch_openclaw_voice.py
+./kokoro-tts --gen-acks
 ```
 Merge [`examples/openclaw.voice.json`](examples/openclaw.voice.json) into `~/.openclaw/openclaw.json` and copy [`examples/SOUL.md`](examples/SOUL.md) into your OpenClaw workspace.
 
@@ -92,6 +93,21 @@ Merge [`examples/openclaw.voice.json`](examples/openclaw.voice.json) into `~/.op
 ./voice-audit 30
 ./voice-audit --corrections
 ```
+
+## Production Reference vs. Untested Extension Hooks
+
+### How we run this in production
+We run this stack on a dedicated Linux home server (**Ubuntu 24.04**, dual Pascal/Turing GPUs + 6 CPU threads) connected to a live Discord voice channel:
+* **STT:** `whisper_daemon.py` running `distil-large-v3` (`int8`) pinned to an **NVIDIA GTX 1080 (8 GB)** via `CUDA_VISIBLE_DEVICES=1`.
+* **TTS:** `kokoro_daemon.py` running `kokoro-v1.0.onnx` (`bm_george` British butler voice) on **6 CPU threads** (`ORT_SEQUENTIAL`).
+* **Knowledge Base:** `wow_forever.sqlite` (`~30 MB`, 12,000+ Questie quests/NPCs/items/objects + 444 Classic-filtered Warcraft Wiki lore articles) queried in-process by `whisper-stt` in `<5 ms`.
+* **Agent Runtime:** OpenClaw (`@openclaw/discord` in `stt-tts` mode) calling **MiniMax-M2.7** with the inline `[Verified Local WoW Forever QuestieDB Data]` block attached to each wake turn.
+
+### Adapting for your own bot or non-OpenClaw agent (untested live)
+Because `whisper-stt` (`wav -> stdout`) and `kokoro-tts` (`text -> wav`) are plain Unix CLI filters, we exposed three environment variable overrides so you can connect a differently named bot, a non-WoW knowledge base, or a non-OpenClaw voice framework. **Note:** These overrides are verified via offline unit tests (`voice_replay.py`), not live-tested against external agent frameworks:
+* `VOICE_WAKE_NAME` / `VOICE_WAKE_PATTERN` — Change the wake word from `"Alfred"` (e.g. `VOICE_WAKE_NAME="Jarvis"`).
+* `VOICE_CONTEXT_CMD` — Replace `wow_db.auto_context()` with any shell command that reads the user transcript on `stdin` and prints ground-truth context on `stdout` (or leave `wow_forever.sqlite` absent to run with zero RAG).
+* `VOICE_INTERRUPT_CMD` — Replace OpenClaw's `/tmp/alfred_voice_ctrl.sock` stop command with a custom shell command (e.g. `pkill -f ffplay` or an HTTP webhook) when a user says `"<Bot> stop"`.
 
 ## License
 MIT

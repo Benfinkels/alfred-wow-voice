@@ -83,7 +83,8 @@ def speakable(text: str) -> str:
     t = re.sub(r"https?://\S+|www\.\S+|\b\S+\.(?:com|net|org|gg|io)\S*", "", t)
     t = re.sub(r"\[\^?\d+(?:[,\-–]\s*\d+)*\]|【[^】]*】|\(\s*\d+\s*\)", "", t)
     t = re.sub(r"(?<=\d),(?=\d{3}\b)", "", t)
-    t = re.sub(r"~", "about ", t)
+    t = re.sub(r"(?<!about\s)~", "about ", t, flags=re.I)
+    t = re.sub(r"~", "", t)
     t = re.sub(r"\b(\d+)\s*[-–]\s*(\d+)\s*(?:%|percent\b)", r"\1 to \2 percent", t)
     t = re.sub(r"\b(\d+)\.0\b", r"\1", t)
     t = re.sub(r"\b(\d+)\.(\d+)\b", r"\1 point \2", t)
@@ -94,13 +95,34 @@ def speakable(text: str) -> str:
     return re.sub(r"\s+([,.;:!?])", r"\1", t)
 
 
+DEFAULT_ACKS = [
+    ("ack_right_away.wav", "Right away, sir."),
+    ("ack_one_moment.wav", "One moment, sir."),
+    ("ack_very_good.wav", "Very good, sir."),
+    ("ack_checking.wav", "Allow me a moment to check the archives."),
+    ("ack_certainly.wav", "Certainly, sir."),
+]
+
+
 def main():
     parser = argparse.ArgumentParser(description="Kokoro-82M TTS CLI for OpenClaw")
     parser.add_argument("--text", default="")
-    parser.add_argument("--output", required=True)
+    parser.add_argument("--output", default="")
     parser.add_argument("--voice", default="bm_george")
     parser.add_argument("--speed", type=float, default=1.05)
+    parser.add_argument("--gen-acks", nargs="?", const=os.path.expanduser("~/.openclaw/voice-acks"), help="Generate default acknowledgement WAV clips")
     args = parser.parse_args()
+
+    if args.gen_acks:
+        os.makedirs(args.gen_acks, exist_ok=True)
+        for fname, phrase in DEFAULT_ACKS:
+            out = os.path.join(args.gen_acks, fname)
+            if not run_socket_client(phrase, out, args.voice, args.speed):
+                run_in_process(phrase, out, args.voice, args.speed)
+            print(f"Generated {out}")
+        return
+    if not args.output:
+        sys.exit("error: --output is required unless --gen-acks is passed")
 
     text = args.text.strip() or sys.stdin.read().strip()
     if not text:

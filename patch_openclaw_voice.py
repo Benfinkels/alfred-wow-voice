@@ -134,6 +134,18 @@ def patch():
         CTRL_SERVER_SNIPPET,
     )
 
+    required = [
+        "ALFRED_ACK_PATCH",
+        "const __turnStartedAt = Date.now();",
+        "__alfredLastInterruptTs",
+        "ALFRED_INTERRUPT_PATCH",
+        "__alfredTransports",
+        "/tmp/alfred_voice_ctrl.sock",
+    ]
+    missing = [m for m in required if m not in vr_src]
+    if missing:
+        sys.exit(f"ERROR: patch target mismatch in {vr_path}; missing markers: {missing}")
+
     open(vr_path, "w", encoding="utf-8").write(vr_src)
     print(f"Patched {vr_path} and {rt_path}")
 

@@ -104,7 +104,24 @@ def main():
         for f in failures:
             print("  *", f)
         sys.exit(1)
-    print("\nALL REGRESSION CHECKS PASSED!")
+
+    # Verify custom wake-word override (VOICE_WAKE_NAME) and speakable() "about ~" fix
+    os.environ["VOICE_WAKE_NAME"] = "Jarvis"
+    _spec_j = spec_from_loader("whisper_stt_j", SourceFileLoader("whisper_stt_j", _stt_path))
+    stt_jarvis = module_from_spec(_spec_j)
+    _spec_j.loader.exec_module(stt_jarvis)
+    os.environ.pop("VOICE_WAKE_NAME", None)
+    assert stt_jarvis.classify("Hey Jarvis, what is the weather?") == "WAKE", "VOICE_WAKE_NAME WAKE failed"
+    assert stt_jarvis.classify("Jarvis stop") == "INTERRUPT", "VOICE_WAKE_NAME INTERRUPT failed"
+    assert stt_jarvis.classify("I have Jarvis muted") == "IGNORE", "VOICE_WAKE_NAME IGNORE failed"
+
+    _tts_path = os.path.join(HERE, "kokoro-tts")
+    _spec_t = spec_from_loader("kokoro_tts", SourceFileLoader("kokoro_tts", _tts_path))
+    kokoro_tts = module_from_spec(_spec_t)
+    _spec_t.loader.exec_module(kokoro_tts)
+    assert kokoro_tts.speakable("About ~2-4% drop") == "About 2 to 4 percent drop", "speakable 'about ~' check failed"
+    assert kokoro_tts.speakable("~2-4% drop") == "about 2 to 4 percent drop", "speakable '~' check failed"
+    print("\nALL REGRESSION & EXTENSION HOOK CHECKS PASSED!")
 
 
 if __name__ == "__main__":

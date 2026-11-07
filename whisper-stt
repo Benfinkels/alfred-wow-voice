@@ -119,26 +119,27 @@ BROAD_STRATEGY_PAT = re.compile(
 )
 
 
-def is_simple_wow_lookup(text: str, ctx: str, db_rows: int) -> bool:
-    """High-Confidence JEV Gate: favor gemini-3.5-flash-lite unless 100% confident Local Gemma 4 E2B has exact single-record ground truth."""
+def estimate_difficulty(text: str, ctx: str, db_rows: int) -> float:
+    """ATLAS 3-Signal Difficulty Estimator: D(x) = 0.40*(1 - s_p) + 0.30*(1 - r_c) + 0.30*q_c in [0, 1]."""
     if db_rows <= 0 or not ctx:
-        return False
-    if COMPLEX_QUERY.search(text) or BROAD_STRATEGY_PAT.search(text):
-        return False
+        return 1.0
     words = text.split()
-    if len(words) > 18 or not NARROW_LOOKUP_PAT.search(text):
-        return False
-    # Require top 4 non-lore DB rows to explicitly match a specific entity keyword (>4 chars) from the question or a verified NPC role flag
-    top_blob = "\n".join(r for r in ctx.splitlines()[1:6] if not r.startswith("- Lore (")).lower()
-    if not top_blob:
-        return False
-    if re.search(r"\b(repair|vendor|innkeeper|flight|trainer)\b", text, re.I) and ("[repair vendor]" in top_blob or "[flight master]" in top_blob or "[innkeeper]" in top_blob):
-        return True
-    q_tokens = [
-        w for w in re.findall(r"[a-z0-9]+", text.lower())
-        if len(w) >= 5 and w not in {"alfred", "where", "which", "there", "about", "quest", "quests", "level", "closest", "vendor", "repair", "located"}
-    ]
-    return bool(q_tokens) and any(t in top_blob for t in q_tokens)
+    has_broad = bool(
+        COMPLEX_QUERY.search(text)
+        or re.search(r"\b(should\s+(?:i|we)\s+(?:level|skip|go|do|leave|pick)|skip|best|order|directions|landmarks|tips|build|fastest|next|why|how\s+do\s+we\s+get|relative\s+to|more\s+specific|unabridged|wipe)\b", text, re.I)
+    )
+    q_c = min(1.0, (len(words) / 22.0) * 0.5 + (0.8 if has_broad else 0.0))
+    top_blob = "\n".join(ctx.splitlines()[1:6]).lower()
+    stop = {"alfred", "where", "which", "there", "about", "quest", "quests", "level", "should", "nearest", "closest"}
+    q_toks = [w[:5] for w in re.findall(r"[a-z0-9]+", text.lower()) if len(w) >= 4 and w not in stop]
+    r_c = sum(1 for t in q_toks if t in top_blob) / max(1, len(q_toks))
+    s_p = 1.0 if (NARROW_LOOKUP_PAT.search(text) or re.search(r"\b(fishing\s+level|train\s+for|drop\s+rate)\b", text, re.I)) else 0.0
+    return 0.40 * (1.0 - s_p) + 0.30 * (1.0 - r_c) + 0.30 * q_c
+
+
+def is_simple_wow_lookup(text: str, ctx: str, db_rows: int) -> bool:
+    """Route to local Gemma 4 E2B only when ATLAS 3-Signal Difficulty D(x) < 0.28 (high confidence, low complexity)."""
+    return estimate_difficulty(text, ctx, db_rows) < 0.28
 
 
 FEATURE_LOG_PATH = os.environ.get("VOICE_FEATURE_LOG", os.path.expanduser("~/.openclaw/logs/feature-requests.jsonl"))

@@ -65,10 +65,60 @@ TOWN_TO_ZONE = {
     "razor hill": "Durotar",
     "bloodhoof": "Mulgore",
     "auberdine": "Darkshore",
+    "dolanaar": "Teldrassil",
+    "shadowglen": "Teldrassil",
+    "starbreeze": "Teldrassil",
+    "ban'ethil": "Teldrassil",
+    "rut'theran": "Teldrassil",
     "astranaar": "Ashenvale",
     "booty bay": "Stranglethorn Vale",
     "gadgetzan": "Tanaris",
 }
+
+TOWN_HUB_COORDS = {
+    "goldshire": ("Elwynn Forest", 42.1, 65.9, "Goldshire Lion's Pride Inn & Blacksmith"),
+    "northshire": ("Elwynn Forest", 48.2, 42.9, "Northshire Abbey"),
+    "sentinel hill": ("Westfall", 56.5, 52.6, "Sentinel Hill tower"),
+    "moonbrook": ("Westfall", 44.5, 69.5, "Moonbrook"),
+    "lakeshire": ("Redridge Mountains", 26.5, 45.3, "Lakeshire inn & bridge"),
+    "darkshire": ("Duskwood", 73.9, 44.4, "Darkshire Scarlet Raven Tavern"),
+    "thelsamar": ("Loch Modan", 34.8, 49.3, "Thelsamar Stoutlager Inn"),
+    "kharanos": ("Dun Morogh", 47.2, 52.2, "Kharanos Thunderbrew Distillery"),
+    "menethil": ("Wetlands", 10.7, 60.9, "Menethil Harbor Deepwater Tavern"),
+    "southshore": ("Hillsbrad Foothills", 51.1, 58.9, "Southshore inn"),
+    "tarren mill": ("Hillsbrad Foothills", 62.4, 19.8, "Tarren Mill inn"),
+    "brill": ("Tirisfal Glades", 61.7, 52.0, "Brill Gallows' End Tavern"),
+    "sepulcher": ("Silverpine Forest", 43.4, 41.3, "The Sepulcher"),
+    "crossroads": ("The Barrens", 52.0, 29.9, "The Crossroads"),
+    "ratchet": ("The Barrens", 62.4, 37.6, "Ratchet port"),
+    "camp taurajo": ("The Barrens", 44.8, 59.1, "Camp Taurajo"),
+    "razor hill": ("Durotar", 51.9, 41.6, "Razor Hill"),
+    "bloodhoof": ("Mulgore", 47.5, 60.2, "Bloodhoof Village"),
+    "auberdine": ("Darkshore", 37.0, 44.1, "Auberdine inn & dock"),
+    "dolanaar": ("Teldrassil", 56.3, 59.8, "Dolanaar town center; note that Nadyia Maneweaver & Radnaal Maneweaver at (41.9, 49.4) are NOT inside Dolanaar, they stand in a small roadside wooden pavilion west-northwest of Dolanaar along the main road toward Darnassus, south of the Pools of Arlithrien"),
+    "shadowglen": ("Teldrassil", 58.7, 41.5, "Shadowglen Aldrassil tree"),
+    "starbreeze": ("Teldrassil", 64.5, 51.0, "Starbreeze Village"),
+    "rut'theran": ("Teldrassil", 55.6, 92.0, "Rut'theran Village below Darnassus"),
+    "astranaar": ("Ashenvale", 36.6, 49.6, "Astranaar inn"),
+    "booty bay": ("Stranglethorn Vale", 27.1, 77.2, "Booty Bay Salty Sailor Tavern"),
+    "gadgetzan": ("Tanaris", 51.6, 27.9, "Gadgetzan town"),
+}
+
+
+def annotate_hub_direction(row: str, hub_title: str, zone: str, hx: float, hy: float) -> str:
+    """Append exact INSIDE/OUTSIDE + compass direction from a named town hub when coordinates are in the same zone."""
+    import math
+    m = re.search(rf"{re.escape(zone)}\s*\((\d+\.\d+),\s*(\d+\.\d+)\)", row)
+    if not m or not row.startswith("NPC:"):
+        return row
+    nx, ny = float(m.group(1)), float(m.group(2))
+    dx, dy = nx - hx, ny - hy
+    dist = math.hypot(dx, dy)
+    if dist <= 3.5:
+        return f"{row} [INSIDE {hub_title} ({hx}, {hy})]"
+    dirs = ["east", "southeast", "south", "southwest", "west", "northwest", "north", "northeast"]
+    idx = round(((math.degrees(math.atan2(dy, dx)) + 360) % 360) / 45) % 8
+    return f"{row} [OUTSIDE {hub_title}: ~{dist:.0f} map units {dirs[idx]} of {hub_title} ({hx}, {hy})]"
 
 KNOWN_ZONES = [
     "Westfall", "Elwynn Forest", "Dun Morogh", "Loch Modan", "Redridge Mountains",
@@ -125,26 +175,27 @@ def get_conn(db_path: str = DEFAULT_DB) -> sqlite3.Connection:
 
 def query_zone_quests(conn: sqlite3.Connection, zone: str, level: int | None = None, limit: int = 14) -> list[str]:
     cur = conn.cursor()
+    excl = "" if zone.lower() == "camping" else "AND zone NOT LIKE 'Camping%' AND zone NOT LIKE 'Midsummer%' AND zone NOT LIKE 'Lunar%'"
     if level is not None:
         rows = cur.execute(
-            """
+            f"""
             SELECT summary FROM quests
-            WHERE zone LIKE ? AND req_level <= ? AND quest_level >= ?
-            ORDER BY (prereqs != ''), ABS(quest_level - ?), req_level, id
+            WHERE zone LIKE ? {excl} AND req_level <= ? AND quest_level >= ?
+            ORDER BY (zone = ?) DESC, (prereqs != ''), ABS(quest_level - ?), req_level, id
             LIMIT ?
             """,
-            (f"%{zone}%", level + 1, max(1, level - 3), level, limit),
+            (f"%{zone}%", level + 3, max(1, level - 2), zone, level, limit),
         ).fetchall()
         if rows:
             return [r["summary"] for r in rows]
     rows = cur.execute(
-        """
+        f"""
         SELECT summary FROM quests
-        WHERE zone LIKE ?
-        ORDER BY (prereqs != ''), quest_level, req_level, id
+        WHERE zone LIKE ? {excl}
+        ORDER BY (zone = ?) DESC, quest_level, req_level, id
         LIMIT ?
         """,
-        (f"%{zone}%", limit),
+        (f"%{zone}%", zone, limit),
     ).fetchall()
     return [r["summary"] for r in rows]
 
@@ -203,6 +254,25 @@ def query_fts(conn: sqlite3.Connection, text: str, limit: int = 8) -> list[str]:
                 seen.add(r["summary"])
                 results.append(r["summary"])
 
+    # 3. Fast difflib fuzzy proper-noun fallback when exact/stem FTS finds nothing
+    if fts_terms and not results:
+        import difflib
+        vocab_rows = cur.execute("SELECT name FROM quests UNION ALL SELECT name FROM items UNION ALL SELECT name FROM npcs").fetchall()
+        vocab = {w for r in vocab_rows for w in re.findall(r"[a-z0-9]+", r[0].lower()) if len(w) >= 5 and w not in STOPWORDS}
+        vocab_list = list(vocab)
+        fuzzy_terms = []
+        for t in fts_terms[:4]:
+            if len(t) >= 5:
+                m = difflib.get_close_matches(t, vocab_list, n=1, cutoff=0.78)
+                if m:
+                    fuzzy_terms.append(m[0])
+        if fuzzy_terms:
+            fq = " OR ".join(f'name : "{ft}"*' for ft in fuzzy_terms)
+            for r in cur.execute("SELECT summary FROM wow_fts WHERE wow_fts MATCH ? ORDER BY rank LIMIT ?", (fq, limit)):
+                if r["summary"] not in seen:
+                    seen.add(r["summary"])
+                    results.append(r["summary"])
+
     return results[:limit]
 
 
@@ -234,15 +304,43 @@ STT_ALIASES = {
     r"\bonexia\b": "Onyxia",
     r"\bragneros\b": "Ragnaros",
     r"\bwest\s+falls?\s+(?:2|too|two)\b": "Westfall Stew",
-    r"\bloch\s+m[ao]d[ao]n(?:'s)?\b": "Loch Modan",
+    r"\bl[ao]ch\s*m[ao]d[ao]n(?:'s)?\b": "Loch Modan",
     r"\bred\s+ridge\b": "Redridge Mountains",
     r"\bdun\s+m[ao]r[ao]w?\b": "Dun Morogh",
     r"\bpal[ai]d[ai]ns?\b": "Paladin",
     r"\biron\s+forge\b": "Ironforge",
-    r"\belw[yi]nn?\s+forest\b": "Elwynn Forest",
+    r"\belm?w[yi]nn?\s+forest\b": "Elwynn Forest",
+    r"\bintel\s+dr[ao]ss?il\b": "in Teldrassil",
+    r"\btel\s*dr[ao]ss?il\b": "Teldrassil",
+    r"\bdol[ai]n\s*(?:r|ar|aar)(?:\s+village)?\b": "Dolanaar",
+    r"\bdellen(?:'s)?\s+earth\b": "Denalan's Earth",
+    r"\bstar\s*bree(?:'?s|ze)?\s+village\b": "Starbreeze Village",
+    r"\bdar\s*nass?us\b": "Darnassus",
+    r"\bleather[\s\-]+working\b": "Leatherworking",
+    r"\bfirst[\s\-]+aid\b": "First Aid",
+    r"\bauber\s*dine\b": "Auberdine",
+    r"\b[ck]al\s*dor[iey]+\b": "Kaldorei",
+    r"\bsin\s*dor[iey]+\b": "Sin'dorei",
+    r"\bren\s*dor[iey]+\b": "Ren'dorei",
+    r"\bquel\s*dor[iey]+\b": "Quel'dorei",
+    r"\b(?:nine|night)\s+savers?\b": "Nightsabers",
     r"\b(?:nomragon|no\s+morrigan|gnomragon)\b": "Gnomeregan",
     r"\b(?:archmaid\s+)?theocrat[iu]s\b": "Theocritus",
     r"\bsentinel\s+tower\b": "Sentinel Hill",
+    r"\b(?:north\s+thane(?:\s+iron\s*forge)?|hall\s+of\s+thanes?)\b": "Hall of Thanes",
+    r"\b(?:rumi|rummy)\s+of\s+(?:nomragon|no\s+morrigan|gnomeregan)\b": "Gnomeregan",
+    r"\barchmaid\b": "Archmage",
+    r"\btheocratus(?:'s)?\b": "Theocritus",
+    r"\bdry\s+times\b": "Dry Times",
+}
+
+
+WORD_NUMS = {
+    "one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
+    "six": "6", "seven": "7", "eight": "8", "nine": "9", "ten": "10",
+    "eleven": "11", "twelve": "12", "thirteen": "13", "fourteen": "14",
+    "fifteen": "15", "sixteen": "16", "seventeen": "17", "eighteen": "18",
+    "nineteen": "19", "twenty": "20",
 }
 
 
@@ -250,6 +348,12 @@ def normalize_stt(text: str) -> str:
     out = text
     for pat, repl in STT_ALIASES.items():
         out = re.sub(pat, repl, out, flags=re.I)
+    out = re.sub(
+        r"\b(level|lvl)\s+(" + "|".join(WORD_NUMS.keys()) + r")\b",
+        lambda m: f"{m.group(1)} {WORD_NUMS[m.group(2).lower()]}",
+        out,
+        flags=re.I,
+    )
     return out
 
 
@@ -266,16 +370,31 @@ def query_lore(conn: sqlite3.Connection, text: str, limit: int = 2) -> list[str]
             return []
         results = []
         seen = set()
-        # 0. Multi-token phrase match first (e.g. "Queen Azshara", "Loch Modan", "Sentinel Hill")
+        # 0. Multi-token overlap match (prioritizes guides/lore matching 2+ tokens in title/aliases, e.g. "fishing" + "loch modan" or "train" + "axes")
         if len(tokens) >= 2:
             phrase = " ".join(tokens)
             for r in cur.execute(
-                "SELECT title, summary FROM lore WHERE lower(title) = ? OR lower(title) LIKE ? OR lower(aliases) LIKE ? ORDER BY (lower(title) != ?), length(title) LIMIT 2",
-                (phrase, f"%{phrase}%", f"%{phrase}%", phrase),
+                "SELECT title, summary FROM lore WHERE lower(title) = ? OR lower(title) LIKE ? ORDER BY (lower(title) != ?), length(title) LIMIT 2",
+                (phrase, f"%{phrase}%", phrase),
             ):
                 if r["title"] not in seen:
                     seen.add(r["title"])
                     results.append(f"Lore ({r['title']}): {r['summary']}")
+            stems = [t[:-1] if t.endswith("s") and len(t) > 4 else t for t in tokens if len(t) >= 4]
+            if len(stems) >= 2 and len(results) < limit:
+                scored = []
+                for r in cur.execute("SELECT title, aliases, summary FROM lore"):
+                    t_low = r["title"].lower()
+                    a_low = (r["aliases"] or "").lower()
+                    t_hits = sum(1 for s in stems if s in t_low)
+                    a_hits = sum(1 for s in stems if s in a_low or s in t_low)
+                    if a_hits >= 2:
+                        scored.append((a_hits, t_hits, -len(t_low), r["title"], r["summary"]))
+                scored.sort(reverse=True)
+                for _, _, _, rtitle, rsum in scored[:limit]:
+                    if rtitle not in seen and len(results) < limit:
+                        seen.add(rtitle)
+                        results.append(f"Lore ({rtitle}): {rsum}")
         # 1. Single-token exact title or word-boundary match
         for t in tokens:
             if len(results) >= limit:
@@ -343,23 +462,28 @@ def auto_context(question: str, db_path: str = DEFAULT_DB) -> str:
     question = normalize_stt(question)
     q_lower = question.lower()
 
-    # Detect level mention ("level 10", "lvl 10", "10 in westfall")
-    lvl_match = re.search(r"\b(?:level|lvl)\s*(\d{1,2})\b", q_lower)
-    level = int(lvl_match.group(1)) if lvl_match else None
+    # Detect level mention (prefer current character level when multiple levels are mentioned)
+    curr_lvl = re.search(r"\b(?:currently|i'?m|i\s+am|we'?re|we\s+are|at)\s+(?:level|lvl)\s*(\d{1,2})\b", q_lower)
+    all_lvls = [int(m.group(1)) for m in re.finditer(r"\b(?:level|lvl)\s*(\d{1,2})\b", q_lower)]
+    level = int(curr_lvl.group(1)) if curr_lvl else (all_lvls[0] if all_lvls else None)
 
-    # Detect known zone/profession mention (excluding "Queen Azshara" from triggering Azshara zone)
+    # Detect all known zones/towns ordered by where they appear in the question
     q_for_zone = re.sub(r"\bqueen\s+azshara\b", "", q_lower)
-    matched_zone = None
+    zone_hits: list[tuple[int, str]] = []
     for z in sorted(KNOWN_ZONES, key=len, reverse=True):
         short_z = z.lower().replace("the ", "").split(" mountains")[0].split(" vale")[0].split(" forest")[0].split(" glades")[0].split(" foothills")[0]
-        if z.lower() in q_for_zone or (len(short_z) >= 6 and re.search(rf"\b{re.escape(short_z)}\b", q_for_zone)):
-            matched_zone = z
-            break
-    if not matched_zone:
-        for town, z in TOWN_TO_ZONE.items():
-            if town in q_for_zone:
-                matched_zone = z
-                break
+        m = re.search(rf"\b{re.escape(z.lower())}\b", q_for_zone) or (len(short_z) >= 6 and re.search(rf"\b{re.escape(short_z)}\b", q_for_zone))
+        if m and all(z != ez for _, ez in zone_hits):
+            zone_hits.append((m.start(), z))
+    for town, z in TOWN_TO_ZONE.items():
+        m = re.search(rf"\b{re.escape(town)}\b", q_for_zone)
+        if m and all(z != ez for _, ez in zone_hits):
+            zone_hits.append((m.start(), z))
+    PROF_ZONES = {"Blacksmithing", "Alchemy", "Engineering", "Leatherworking", "Tailoring", "Cooking", "First Aid", "Fishing", "Herbalism", "Camping"}
+    zone_hits.sort(key=lambda x: (x[1] in PROF_ZONES, x[0]))
+    matched_zones = [z for _, z in zone_hits]
+    matched_zone = matched_zones[0] if matched_zones else None
+    matched_hub = next((t for t in TOWN_HUB_COORDS if re.search(rf"\b{re.escape(t)}\b", q_for_zone)), None)
 
     try:
         conn = get_conn(db_path)
@@ -367,15 +491,22 @@ def auto_context(question: str, db_path: str = DEFAULT_DB) -> str:
         return ""
 
     lines = query_corrections(question)
-    lore_rows = query_lore(conn, question, limit=2)
+    if matched_hub:
+        hz, hx, hy, hdesc = TOWN_HUB_COORDS[matched_hub]
+        lines.append(f"Landmark ({matched_hub.title()}): Located in {hz} at ({hx}, {hy}) \u2014 {hdesc}.")
+    is_lore_q = bool(re.search(r"\b(lore|history|story|who\s+is|origin|origins|background|describe|explain|tell\s+me\s+about)\b", q_lower))
+    lore_rows = query_lore(conn, question, limit=2 if is_lore_q or not matched_zones else 1)
     lines.extend(lore_rows)
 
     if matched_zone:
-        if re.search(r"\b(repair|vendor|ammo|arrows?|bullets?|buy|sell|merchant|inn|innkeeper|flight|gryphon|wyvern|stable|trainer|smith|bowyer|armorer|weaponsmith|quartermaster|supplies|goods)\b", q_lower):
-            for r in conn.execute(
+        if re.search(r"\b(repair|vendor|ammo|arrows?|bullets?|buy|sell|merchant|inn|innkeeper|flight|gryphon|wyvern|stable|trainer|smith|bowyer|armorer|weaponsmith|quartermaster|supplies|goods|leatherwork|skinning|cooking|alchemy|herbalism|mining|tailoring|enchanting|first\s+aid|fishing|warrior|rogue|priest|hunter|druid|mage|warlock|paladin|shaman)\b", q_lower):
+            prof_m = re.search(r"\b(leatherwork|skin|cook|alchem|herb|min|tailor|enchant|first\s+aid|fish|warrior|rogue|priest|hunter|druid|mage|warlock|paladin|shaman)", q_lower)
+            prof_stem = prof_m.group(1) if prof_m else "___none___"
+            want_trainer = 1 if re.search(r"\b(trainer|train|learn|leatherwork|skin|cook|alchem|herb|min|tailor|enchant|first\s+aid)\b", q_lower) else 0
+            npc_rows = conn.execute(
                 """
-                SELECT summary FROM npcs
-                WHERE zone LIKE ?
+                SELECT summary, subname, coords FROM npcs
+                WHERE zone LIKE ? AND coords NOT LIKE '%(0.0, 0.0)%' AND name NOT LIKE 'World %'
                   AND (
                     subname LIKE '%Bowyer%' OR subname LIKE '%Gun%' OR subname LIKE '%Ammo%'
                     OR subname LIKE '%Armor%' OR subname LIKE '%Weapon%' OR subname LIKE '%Smith%'
@@ -384,17 +515,37 @@ def auto_context(question: str, db_path: str = DEFAULT_DB) -> str:
                     OR subname LIKE '%Gryphon%' OR subname LIKE '%Flight%' OR subname LIKE '%Wyvern%'
                     OR subname LIKE '%Bat%' OR subname LIKE '%Trainer%' OR subname LIKE '%Stable%'
                   )
-                ORDER BY (subname LIKE '%Bowyer%' OR subname LIKE '%Gun%' OR subname LIKE '%Armor%' OR subname LIKE '%Smith%' OR subname LIKE '%General%' OR subname LIKE '%Trade%' OR subname LIKE '%Innkeeper%' OR subname LIKE '%Gryphon%') DESC, id
-                LIMIT 10
+                ORDER BY (subname LIKE ?) DESC, (? AND subname LIKE '%Trainer%') DESC, (subname LIKE '%[Repair Vendor]%' OR subname LIKE '%[Flight Master]%' OR subname LIKE '%[Innkeeper]%') DESC, (subname LIKE '%Bowyer%' OR subname LIKE '%Gun%' OR subname LIKE '%Armor%' OR subname LIKE '%Smith%' OR subname LIKE '%General%' OR subname LIKE '%Trade%') DESC, id
+                LIMIT 18
                 """,
-                (f"%{matched_zone}%",),
-            ):
-                if r["summary"] not in lines:
-                    lines.append(r["summary"])
-        z_rows = query_zone_quests(conn, matched_zone, level=level, limit=12)
+                (f"%{matched_zone}%", f"%{prof_stem}%", want_trainer),
+            ).fetchall()
+            if matched_hub and TOWN_HUB_COORDS[matched_hub][0] == matched_zone:
+                import math
+                _, hx, hy, _ = TOWN_HUB_COORDS[matched_hub]
+                def _hub_sort_key(r):
+                    sub_match = 0 if prof_stem.lower() in (r["subname"] or "").lower() else 1
+                    m = re.search(r"\((\d+\.\d+),\s*(\d+\.\d+)\)", r["coords"] or "")
+                    dist = math.hypot(float(m.group(1)) - hx, float(m.group(2)) - hy) if m else 999.0
+                    return (sub_match, dist)
+                npc_rows = sorted(npc_rows, key=_hub_sort_key)
+            for r in npc_rows[:10]:
+                s = r["summary"]
+                if matched_hub and TOWN_HUB_COORDS[matched_hub][0] == matched_zone:
+                    _, hx, hy, _ = TOWN_HUB_COORDS[matched_hub]
+                    s = annotate_hub_direction(s, matched_hub.title(), matched_zone, hx, hy)
+                if s not in lines:
+                    lines.append(s)
+        primary_limit = 10 if len(matched_zones) > 1 else 12
+        z_rows = query_zone_quests(conn, matched_zone, level=level, limit=primary_limit)
         for r in z_rows:
             if r not in lines:
                 lines.append(r)
+        if len(matched_zones) > 1:
+            sec_lvl = all_lvls[-1] if len(all_lvls) > 1 else level
+            for r in query_zone_quests(conn, matched_zones[1], level=sec_lvl, limit=4):
+                if r not in lines:
+                    lines.append(r)
 
     # Also check specific entity keywords (removing the matched zone name and level numbers)
     remainder = re.sub(r"\b(?:level|lvl)?\s*\d+\b", " ", q_lower)
@@ -410,10 +561,10 @@ def auto_context(question: str, db_path: str = DEFAULT_DB) -> str:
     if not lines:
         return ""
     header = (
-        "[Verified Local WoW Forever QuestieDB Data — Ground Truth Attached. "
-        "Answer directly from these facts in ONE single turn WITHOUT calling web_search "
-        "(unless a specific detail is missing below). NEVER output partial answer text "
-        "before a tool_call, as Discord voice only speaks your final message after all tool calls finish]:"
+        "[Verified Local WoW Forever QuestieDB Data \u2014 Ground Truth Attached. "
+        "Answer directly from these facts in ONE single turn WITHOUT calling web_search. "
+        "Keep spoken replies concise (2-3 short sentences max, under 60 words) and answer ONLY for the zone in THIS question (ignore zones from earlier turns). "
+        "NEVER output partial answer text before a tool_call]:"
     )
     return header + "\n- " + "\n- ".join(lines[:15])
 

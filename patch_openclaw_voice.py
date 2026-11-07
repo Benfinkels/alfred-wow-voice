@@ -63,7 +63,7 @@ def find_setup_dir() -> str:
 def patch():
     setup_dir = find_setup_dir()
     vr_matches = [p for p in glob.glob(os.path.join(setup_dir, "voice-runtime-*.mjs")) if not p.endswith(".orig")]
-    rt_matches = [p for p in glob.glob(os.path.join(setup_dir, "runtime-*.mjs")) if not p.endswith(".orig")]
+    rt_matches = [p for p in sorted(glob.glob(os.path.join(setup_dir, "runtime-*.mjs"))) if not p.endswith(".orig") and "createPluginRuntimeStore" in open(p, encoding="utf-8").read()]
     if not vr_matches or not rt_matches:
         sys.exit(f"Missing voice-runtime-*.mjs or runtime-*.mjs in {setup_dir}")
     vr_path, rt_path = vr_matches[0], rt_matches[0]
@@ -108,7 +108,11 @@ def patch():
             '\t\t\t}\n'
             '\t\t} catch {}\n'
         )
-        vr_src = vr_src.replace("\t} else {\n\t\tconst prompt = formatVoiceIngressPrompt", ack_hook + "\t\tconst prompt = formatVoiceIngressPrompt")
+        fast_hook = (
+            '\t} else if (transcript.startsWith("<<FAST_LOCAL_REPLY>>")) {\n'
+            '\t\treplyText = transcript.slice(20).trim();\n'
+        ) + ack_hook
+        vr_src = vr_src.replace("\t} else {\n\t\tconst prompt = formatVoiceIngressPrompt", fast_hook + "\t\tconst prompt = formatVoiceIngressPrompt")
     vr_src = vr_src.replace(
         "\tparams.enqueuePlayback(entry, async () => {\n\t\ttry {\n\t\t\tif (entry.sessionLifecycle.status === \"stopped\") return;",
         "\tparams.enqueuePlayback(entry, async () => {\n\t\ttry {\n\t\t\tif (entry.sessionLifecycle.status === \"stopped\") return;\n\t\t\tif ((globalThis.__alfredLastInterruptTs ?? 0) > __turnStartedAt) return;",

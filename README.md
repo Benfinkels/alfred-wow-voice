@@ -12,8 +12,30 @@ Because I already had an [OpenClaw](https://github.com/openclaw/openclaw) agent 
 
 1. **Ignoring hours of party banter (`$0` idle cost):** Five friends talking in a dungeon generate ~400 utterances an hour. [`whisper-stt`](whisper-stt) transcribes each utterance locally on a spare GPU and drops anything not addressed to `"Alfred"` before it ever touches the cloud LLM.
 2. **Eliminating cold-start dead air:** Spawning Python to load `faster-whisper` or `kokoro-onnx` on every voice turn adds `4–6s` of silence. Warm Unix-socket daemons ([`whisper_daemon.py`](whisper_daemon.py) & [`kokoro_daemon.py`](kokoro_daemon.py)) plus an instant pre-recorded butler acknowledgement (*"Right away, sir."*) cut local overhead to under a second.
-3. **Instant, accurate Classic/Forever answers without web search:** Waiting on live `web_search` tool calls takes `5–10s`, and LLMs frequently confuse Retail/Cataclysm changes with Classic or mix up item-drop quests with NPC pickups. [`wow_db.py`](wow_db.py) normalizes Whisper's phonetic WoW misspellings (*"Nomragon"* → *Gnomeregan*, *"Rawl"* → *Thrall*) and injects exact Questie coordinates, drop rates, and Classic lore into the prompt in `<5ms`.
-4. **Barge-in / mid-sentence interrupts:** If a boss pull starts while Alfred is explaining a quest chain, you don't want to listen to a 20-second monologue. Saying *"Alfred stop"* or *"Thanks Alfred"* cuts off playback immediately via `/tmp/alfred_voice_ctrl.sock`.
+3. **Instant, accurate Classic/Forever answers without web search:** Waiting on live `web_search` tool calls takes `5–10s`, and LLMs frequently confuse Retail/Cataclysm changes with Classic or mix up item-drop quests with NPC pickups. [`wow_db.py`](wow_db.py) normalizes Whisper's phonetic WoW misspellings (*"Nomragon"* → *Gnomeregan*, *"Rawl"* → *Thrall*, *"Dolan R"* → *Dolanaar*) and injects exact Questie coordinates, town-hub compass bearings, weapon/profession trainers, gathering/fishing tables, item stats, and Classic lore into the prompt in `<5ms`.
+4. **Barge-in & mid-sentence self-cancellation:** If a boss pull starts while Alfred is explaining a quest chain, saying *"Alfred stop"* or *"Thanks Alfred"* cuts off playback immediately via `/tmp/alfred_voice_ctrl.sock` — and if you change your mind mid-question (*"Hey Alfred, where is... actually never mind"*), `SELF_CANCEL` aborts before calling the LLM.
+5. **Companion `/way X, Y` Discord cards & Voice Feature Requests:** Spoken coordinates are hard to type while running from mobs. Whenever Alfred answers a voice question with locations, [`kokoro-tts`](kokoro-tts) automatically posts a companion card to `#bot-commands` with 1-click copyable `/way X, Y` code blocks for `TomTom` / `WaypointUI`. Friends can also say *"Hey Alfred, log a feature request to..."* to file tickets directly into the backlog and `#bot-commands`.
+
+---
+
+## v2 Update: Why We Switched the Voice Model & Upgraded the Router
+
+In v1, every wake turn passed through the full OpenClaw agent running **`MiniMax-M2.7`**. While `MiniMax-M2.7` is great for long-context agentic tasks, live party play exposed three bottlenecks that drove our v2 architecture:
+
+1. **Eliminating Reasoning-Token Latency (`2.8s` → `~750ms`):**
+   - `MiniMax-M2.7` is a thinking model that generates `1,000–2,200` internal `<think>` tokens before emitting a 25-word spoken reply, adding `2.2–3.2s` of dead air after STT.
+   - Moving voice synthesis inside [`whisper-stt`](whisper-stt) (`<<FAST_LOCAL_REPLY>>`) and switching the cloud voice tier to **`gemini-3.5-flash-lite`** cut cloud LLM latency to **`700–850 ms`** (`3x` faster) at **`$0.00034` per voice turn** (~58,000 voice turns on a `$20` Google Cloud credit), while keeping regular OpenClaw text chats and background tasks on our flat-rate `MiniMax-M2.7` subscription (`$0` Gemini spend outside voice).
+2. **High-Confidence JEV Router (Local `Gemma 4 E2B` vs. `gemini-3.5-flash-lite`):**
+   - We run a warm local **`gemma4:e2b-it-q4_K_M`** (`100% GPU` on an RTX 2080, `~600 ms`, `$0`) alongside **`gemini-3.5-flash-lite`**.
+   - Small `2B` local models excel when given an exact single-record fact (`"Where is the closest bow vendor in Loch Modan?"`), but struggle on open-ended strategy or multi-continent Classic travel routes (*"Should we level in Teldrassil or skip it for Elwynn Forest, and how do we get there?"*).
+   - Our `is_simple_wow_lookup()` gate routes narrow single-entity lookups (`<= 18` words with an exact entity/role match in the top 4 SQLite rows) to local `Gemma 4 E2B` (with automatic `ESCALATE` fallback), and routes broad strategy, multi-zone comparisons, and navigational directions directly to `gemini-3.5-flash-lite`.
+3. **Fixing "In-Town" Coordinate Hallucinations with Deterministic Compass Math:**
+   - During live testing in Teldrassil, a player asked *"Where is the nearest leatherworking trainer to Dolanaar?"* QuestieDB listed `Nadyia Maneweaver` at `Teldrassil (41.9, 49.4)`. Because the DB row only said `Teldrassil (41.9, 49.4)` without Dolanaar's own center (`56.3, 59.8`), the LLM assumed `(41.9, 49.4)` was *inside* Dolanaar—and when the player couldn't find her in town, the dry British butler persona quipped: *"Sir, Nadyia Maneweaver can be found at coordinates 41.9, 49.4 in Dolanaar. Do try opening your eyes next time."*
+   - In reality, `(41.9, 49.4)` is a small roadside pavilion **18 map units northwest of Dolanaar** along the road to Darnassus. [`wow_db.py`](wow_db.py) now includes `TOWN_HUB_COORDS` for 25 Classic town hubs and computes Euclidean distance + compass bearing for every returned NPC (`[INSIDE Dolanaar (56.3, 59.8)]` vs. `[OUTSIDE Dolanaar: ~18 map units northwest of Dolanaar (56.3, 59.8)]`).
+4. **Multi-Addon Ingestion (`37.5 MB` `wow_forever.sqlite`):**
+   - Beyond `QuestieDB`, [`build_wow_db.py`](build_wow_db.py) now compiles **`WhatsTraining`** (all 12 profession recipe tables + exact Weapon Master trainers per city/class), **`GatherLite`** (herb, mining, chest, and fishing node coordinates + fish catch rates and zone fishing skill requirements), **`Spoken_Places` & `Spoken_Bosses`** (subzone & boss voiceover lore), **`AtlasLootClassic`** (boss loot tables & drop rates), and **`wow-classic-items`** (`21,435` item tooltips with weapon DPS, speed, armor, and equip stats).
+5. **Three-Layer Multiplayer Voice Prompt-Injection Defense:**
+   - Because Discord voice cannot authenticate which friend in the channel is speaking, [`whisper-stt`](whisper-stt) enforces: (a) a pre-LLM `INJECTION_GUARD` blocking jailbreaks, system prompts, shell/file commands, and smart-home/appliance probing, (b) `<voice_transcript>` XML delimiter sandboxing on all fast voice calls (which have zero tools attached), and (c) a mandatory `[SECURITY BOUNDARY]` tool-lockdown envelope whenever a request for a public addon/web link is handed to OpenClaw (`MiniMax-M2.7`).
 
 ## Sample Responses (Live Discord Sessions)
 
@@ -53,12 +75,14 @@ kokoro-tts --output <wav>
 
 ## Measured Latency & Footprint
 
-| Stage | Hardware | Warm Latency | Cost |
+| Stage | Hardware / Model | Warm Latency | Cost |
 | :--- | :--- | :--- | :--- |
 | **STT (`whisper_daemon.py`)** | GTX 1080 8GB (`int8`, `distil-large-v3` + WoW `hotwords`) | `350–520 ms` | `$0` |
-| **Wake / Interrupt Gate + SQLite FTS5 RAG (`wow_db.py`)** | CPU (in-process SQLite `mode=ro`) | `4–15 ms` | `$0` |
+| **Wake / Interrupt Gate + SQLite FTS5 RAG (`wow_db.py`)** | CPU (in-process SQLite `mode=ro`, `37.5 MB` multi-addon DB) | `4–25 ms` | `$0` |
+| **Tier 0 Local Voice LLM (`call_local_fast_butler`)** | RTX 2080 8GB (`gemma4:e2b-it-q4_K_M`, `100% GPU`) | `550–680 ms` | `$0` |
+| **Tier 1 Cloud Voice LLM (`call_gemini_butler`)** | `gemini-3.5-flash-lite` (multi-zone / strategy / fallback) | `680–850 ms` | `$0.00034 / turn` |
 | **Voice Interrupt Cut-Off (`voice-ctrl stop`)** | Local Unix socket (`/tmp/alfred_voice_ctrl.sock`) | `<10 ms` after STT | `$0` |
-| **TTS (`kokoro_daemon.py`)** | 6 CPU threads (`kokoro-v1.0.onnx`, `bm_george`) | `200–450 ms` | `$0` |
+| **TTS + `#bot-commands` `/way` Card (`kokoro-tts`)** | 6 CPU threads (`kokoro-v1.0.onnx`, `bm_george`) | `200–450 ms` | `$0` |
 
 ## Files
 

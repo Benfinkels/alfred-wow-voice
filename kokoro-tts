@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Kokoro-82M TTS CLI for OpenClaw: sanitizes text for speech, logs self-corrections, and calls warm daemon."""
-import argparse, json, os, re, socket, sys, time
+"""Kokoro-82M TTS CLI for OpenClaw: sanitizes text for speech, logs self-corrections, calls warm daemon, and posts copyable /way waypoints to #bot-commands."""
+import argparse, json, os, re, socket, sys, time, urllib.request
 
 SOCKET_PATH = os.environ.get("KOKORO_SOCK", "/tmp/kokoro_tts.sock")
 KOKORO_DIR = os.environ.get("KOKORO_DIR", os.path.expanduser("~/.openclaw/workspace/kokoro"))
@@ -8,6 +8,8 @@ MODEL_PATH = os.path.join(KOKORO_DIR, "kokoro-v1.0.onnx")
 VOICES_PATH = os.path.join(KOKORO_DIR, "voices-v1.0.bin")
 AUDIT_LOG = os.environ.get("VOICE_AUDIT_LOG", os.path.expanduser("~/.openclaw/logs/voice-audit.jsonl"))
 CORRECTIONS_LOG = os.environ.get("VOICE_CORRECTIONS_LOG", os.path.expanduser("~/.openclaw/logs/corrections.jsonl"))
+BOT_COMMANDS_CHANNEL_ID = os.environ.get("WOW_TEXT_CHANNEL_ID", "")  # Set to your Discord #bot-commands channel ID
+OPENCLAW_CFG_PATH = os.path.expanduser("~/.openclaw/openclaw.json")
 
 SELF_CORR_RE = re.compile(
     r"\b(you'?re right|you are right|my mistake|i stand corrected|earlier answer|i misspoke|conflated|that'?s on me)\b",
@@ -48,16 +50,111 @@ def run_in_process(text: str, output: str, voice: str, speed: float):
     sf.write(output, samples, sr)
 
 
+def extract_waypoints(question: str, raw_reply: str) -> list[tuple[str, str]]:
+    """Extract (label, '/way X, Y') pairs from both the raw LLM reply and matched wow_db rows."""
+    waypoints: list[tuple[str, str]] = []
+    seen_coords: set[str] = set()
+
+    # 1. Check raw_reply for spoken coordinates like "40.6, 39.6" or "40 point 6, 39 point 6"
+    norm_reply = re.sub(r"(\d{1,2})\s+point\s+(\d)", r"\1.\2", raw_reply, flags=re.I)
+    for m in re.finditer(r"(?<!\d)(\d{1,2}\.\d)\s*,\s*(\d{1,2}\.\d)(?!\d)", norm_reply):
+        x, y = m.group(1), m.group(2)
+        key = f"{x}, {y}"
+        if key not in seen_coords:
+            seen_coords.add(key)
+            prefix = norm_reply[max(0, m.start() - 60):m.start()].strip(" ,(-\u2014:")
+            label = prefix.split(".")[-1].strip() or "Spoken Waypoint"
+            waypoints.append((label[-50:], f"/way {x}, {y}"))
+
+    # 2. Also pull exact coordinates from wow_db for the question so even short Arm-A voice replies get copyable /way blocks
+    if question:
+        try:
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            import wow_db
+            ctx = wow_db.auto_context(wow_db.normalize_stt(question))
+            for line in ctx.splitlines()[1:]:
+                if line.startswith("- Lore ("):
+                    continue
+                head = line.split("|")[0].replace("- ", "").strip()
+                head = re.sub(r"\s*\(#\d+\)", "", head)
+                for cm in re.finditer(r"([A-Za-z'\- ]+?)\s*\(([A-Za-z'\- ]+?)\s*\((\d{1,2}\.\d),\s*(\d{1,2}\.\d)\)\)", line):
+                    entity, zone, x, y = cm.group(1).strip(), cm.group(2).strip(), cm.group(3), cm.group(4)
+                    key = f"{x}, {y}"
+                    if key not in seen_coords:
+                        seen_coords.add(key)
+                        waypoints.append((f"{head} \u2014 {entity} ({zone})", f"/way {x}, {y}"))
+                for cm in re.finditer(r"\|\s*([A-Za-z'\- ]+?)\s*\((\d{1,2}\.\d),\s*(\d{1,2}\.\d)\)", line):
+                    zone, x, y = cm.group(1).strip(), cm.group(2), cm.group(3)
+                    key = f"{x}, {y}"
+                    if key not in seen_coords:
+                        seen_coords.add(key)
+                        waypoints.append((f"{head} ({zone})", f"/way {x}, {y}"))
+        except Exception:
+            pass
+
+    return waypoints[:5]
+
+
+def post_voice_companion_to_discord(question: str, raw_reply: str, arm: str | None = None, feature_summary: str | None = None):
+    """Post the spoken reply + 1-click copyable `/way X, Y` code blocks to Ardent #bot-commands."""
+    if not BOT_COMMANDS_CHANNEL_ID or not raw_reply:
+        return
+    try:
+        token = json.load(open(OPENCLAW_CFG_PATH)).get("channels", {}).get("discord", {}).get("token")
+        if not token:
+            return
+        clean_q = re.sub(r"\s+", " ", (question or "").splitlines()[0]).strip()
+        clean_a = re.sub(r"(\d{1,2})\s+point\s+(\d)", r"\1.\2", raw_reply, flags=re.I).strip()
+
+        parts = []
+        if arm == "FEATURE_REQUEST":
+            parts.append("\U0001f6e0\ufe0f **New Voice Feature Request Logged**")
+            if feature_summary:
+                parts.append(f"\U0001f4cb **Summary:** `{feature_summary}`")
+            if clean_q:
+                parts.append(f"\U0001f399\ufe0f **Voice Transcript:** *{clean_q}*")
+            parts.append(f"\U0001f3a9 **Alfred:** {clean_a}")
+        else:
+            waypoints = extract_waypoints(clean_q, raw_reply)
+            if clean_q:
+                parts.append(f"\U0001f399\ufe0f **Q:** *{clean_q}*")
+            parts.append(f"\U0001f3a9 **Alfred:** {clean_a}")
+            if waypoints:
+                parts.append("**\U0001f4cd Waypoints (click top-right of code box to copy for WoW):**")
+                for label, way_cmd in waypoints:
+                    parts.append(f"*{label}*\n```\n{way_cmd}\n```")
+
+        content = "\n".join(parts)[:1950]
+        req = urllib.request.Request(
+            f"https://discord.com/api/v10/channels/{BOT_COMMANDS_CHANNEL_ID}/messages",
+            data=json.dumps({"content": content}).encode("utf-8"),
+            headers={
+                "Authorization": f"Bot {token}",
+                "Content-Type": "application/json",
+                "User-Agent": "DiscordBot (https://openclaw.ai, 1.0)",
+            },
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=4).read()
+    except Exception:
+        pass
+
+
 def audit(**rec):
     try:
         os.makedirs(os.path.dirname(AUDIT_LOG), exist_ok=True)
         ts = time.strftime("%Y-%m-%dT%H:%M:%S")
         raw_txt = rec.get("raw", "")
+        last_stt = ""
+        last_arm = None
+        last_feat = None
         if os.path.exists(AUDIT_LOG):
             recent = [json.loads(l) for l in open(AUDIT_LOG).read().splitlines()[-25:] if l.strip()]
             woke_stts = [r for r in recent if r.get("kind") == "stt" and r.get("woke")]
             tts_turns = [r for r in recent if r.get("kind") == "tts"]
             last_stt = woke_stts[-1]["text"] if woke_stts else ""
+            last_arm = woke_stts[-1].get("arm") if woke_stts else None
+            last_feat = woke_stts[-1].get("feature_summary") if woke_stts else None
             if SELF_CORR_RE.search(raw_txt) or USER_CORR_RE.search(last_stt):
                 prev_q = woke_stts[-2]["text"] if len(woke_stts) >= 2 else ""
                 wrong_a = tts_turns[-1].get("spoken", "") if tts_turns else ""
@@ -73,6 +170,8 @@ def audit(**rec):
                 rec["corrected"] = True
         with open(AUDIT_LOG, "a") as f:
             f.write(json.dumps({"ts": ts, **rec}) + "\n")
+        if rec.get("kind") == "tts" and raw_txt:
+            post_voice_companion_to_discord(last_stt, raw_txt, last_arm, last_feat)
     except OSError:
         pass
 
@@ -81,16 +180,16 @@ def speakable(text: str) -> str:
     """Strip URLs, citations, and markdown; normalize numbers so Kokoro doesn't pause on commas/dots."""
     t = re.sub(r"\[([^\]]+)\]\((?:https?://)?[^)]+\)", r"\1", text)
     t = re.sub(r"https?://\S+|www\.\S+|\b\S+\.(?:com|net|org|gg|io)\S*", "", t)
-    t = re.sub(r"\[\^?\d+(?:[,\-–]\s*\d+)*\]|【[^】]*】|\(\s*\d+\s*\)", "", t)
+    t = re.sub(r"\[\^?\d+(?:[,\-\u2013]\s*\d+)*\]|\u3010[^\u3011]*\u3011|\(\s*\d+\s*\)", "", t)
     t = re.sub(r"(?<=\d),(?=\d{3}\b)", "", t)
     t = re.sub(r"(?<!about\s)~", "about ", t, flags=re.I)
     t = re.sub(r"~", "", t)
-    t = re.sub(r"\b(\d+)\s*[-–]\s*(\d+)\s*(?:%|percent\b)", r"\1 to \2 percent", t)
+    t = re.sub(r"\b(\d+)\s*[-\u2013]\s*(\d+)\s*(?:%|percent\b)", r"\1 to \2 percent", t)
     t = re.sub(r"\b(\d+)\.0\b", r"\1", t)
     t = re.sub(r"\b(\d+)\.(\d+)\b", r"\1 point \2", t)
     t = re.sub(r"(\d)\s*%", r"\1 percent", t)
     t = re.sub(r"[*_`#>|~]+", "", t)
-    t = re.sub(r"^\s*[-•]\s+|^\s*\d+[.)]\s+", "", t, flags=re.M)
+    t = re.sub(r"^\s*[-\u2022]\s+|^\s*\d+[.)]\s+", "", t, flags=re.M)
     t = re.sub(r"\s+", " ", t).strip()
     return re.sub(r"\s+([,.;:!?])", r"\1", t)
 

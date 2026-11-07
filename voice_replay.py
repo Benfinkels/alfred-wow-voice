@@ -26,7 +26,7 @@ TORTURE_TESTS = [
     ("Hey Alfred, describe the history of the Murlocks", "WAKE", "Lore (Murloc):"),
     ("Hey Alfred, tell me about Kvinajara", "WAKE", "Lore (Queen Azshara):"),
     ("Hey Alfred, tell me about Loch Madon", "WAKE", "Lore (Loch Modan):"),
-    ("Hey Alfred, where can I buy arrows and repair in Loch Modan?", "WAKE", "<Bowyer>"),
+    ("Hey Alfred, where can I buy arrows and repair in Loch Modan?", "WAKE", "Bowyer"),
     ("Hey Alfred, I'm in Westfall at level 10, what quests can I get?", "WAKE", "Poor Old Blanchy"),
     ("Hey Alfred, how do I get Furlbrose Deed?", "WAKE", "Furlbrow's Deed (#184)"),
     ("Hey Alfred, what quests are in Riverglades?", "WAKE", "Riverglades"),

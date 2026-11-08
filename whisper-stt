@@ -175,20 +175,29 @@ def is_casual_or_random(text: str, ctx: str, db_rows: int) -> bool:
 def call_local_sassy_banter(question: str, timeout: float = 9.0) -> tuple[str | None, int]:
     """Handle random banter/chatter on warm local Gemma 4 E2B (:11434) with dry, sassy British butler wit."""
     t0 = time.perf_counter()
-    prompt = (
-        "You are Alfred, a calm, understated British butler (like Alfred Pennyworth) hanging out in a Discord voice channel with friends.\n"
-        "If they ask a real-life or random question (even if speech-to-text says 'did I' instead of 'do I'), give a practical, helpful answer with a touch of dry British wit in 1 or 2 short sentences (under 30 words). If it is just a greeting or banter, reply briefly in character.\n"
-        "Rules: Avoid theatrical cliches ('Good heavens', 'audacity'). Never output map coordinates. Plain spoken text only.\n\n"
-        f"PLAYER REMARK: {question}\n"
-        "SPOKEN REPLY:"
-    )
+    messages = [
+        {"role": "system", "content": (
+            "You are Alfred, a deadpan, dry-witted British butler (like Michael Caine's Alfred Pennyworth) hanging out in Discord voice while the boys play World of Warcraft. "
+            "Reply in 1 or 2 short, conversational spoken sentences (under 25 words). "
+            "If asked a real-world question, give a genuinely useful answer first, followed by a light, dry tease. "
+            "If someone throws banter, slang, or nonsense at you, do not take it literally and never say 'Very well' or 'Certainly, master'. Push back with effortless, understated dry wit (never cheesy villain insults like 'imbecile' or 'whelp'). "
+            "Never output map coordinates."
+        )},
+        {"role": "user", "content": "Hey, Alfred, what is up, brother?"},
+        {"role": "assistant", "content": "Just watching you gentlemen pull half the zone again, sir. Truly a masterclass in tactical restraint."},
+        {"role": "user", "content": "Hey Alfred, how long do I put pizza rolls in the air fryer?"},
+        {"role": "assistant", "content": "Eight minutes at 380 degrees, sir, and do let them cool for thirty seconds so you don't blister the roof of your mouth again."},
+        {"role": "user", "content": "Hey, Alfred, buck that couch."},
+        {"role": "assistant", "content": "What did the upholstery ever do to you, sir? Save some of that hostility for the Deadmines."},
+        {"role": "user", "content": question},
+    ]
     payload = {
         "model": LOCAL_FAST_MODEL,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": messages,
         "stream": False,
         "think": False,
         "keep_alive": "2h",
-        "options": {"num_predict": 70, "temperature": 0.45},
+        "options": {"num_predict": 60, "temperature": 0.55},
     }
     try:
         req = urllib.request.Request(OLLAMA_CHAT_URL, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json"})
@@ -303,7 +312,7 @@ def call_local_fast_butler(question: str, ctx: str, timeout: float = 9.0) -> tup
 
 
 
-GEMINI_MODEL = os.environ.get("VOICE_GEMINI_MODEL", "gemini-3.5-flash")
+GEMINI_MODEL = os.environ.get("VOICE_GEMINI_MODEL", "gemini-2.5-flash")
 OPENCLAW_MINIMAX_QUERY = re.compile(r"\b(link\s+to|send\s+(?:a\s+|me\s+|us\s+|)?link|give\s+\w+\s+a\s+link|install\s+the\s+.*add-?on|curseforge|search\s+the\s+web|look\s+up\s+online)\b", re.I)
 
 
@@ -320,7 +329,7 @@ def get_gemini_key() -> str | None:
 
 
 def call_gemini_butler(question: str, ctx: str, timeout: float = 8.0) -> tuple[str | None, int]:
-    """Call Gemini 3.5 Flash (thinkingBudget=0, ~750ms, ~$0.00035/turn with compact RAG) for high-accuracy voice answers."""
+    """Call Gemini 2.5 Flash (thinkingBudget=0, ~750ms, ~$0.00035/turn with compact RAG) for high-accuracy voice answers."""
     t0 = time.perf_counter()
     key = get_gemini_key()
     if not key:
@@ -495,7 +504,7 @@ def main():
             if use_local:
                 fast_reply, local_ms = call_local_fast_butler(text, ctx)
                 if fast_reply:
-                    arm = "A_LOCAL_GEMMA4"
+                    arm = "LOCAL_SIMPLE_GEMMA4" if AB_MODE == "local" else "A_LOCAL_GEMMA4"
                 else:
                     fast_reply, local_ms = call_gemini_butler(text, ctx)
                     arm = "A_ESCALATED_GEMINI" if fast_reply else "A_ESCALATED_CLOUD"

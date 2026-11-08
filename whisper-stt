@@ -142,7 +142,7 @@ CASUAL_BANTER_PAT = re.compile(
     re.I,
 )
 WOW_SIGNAL_PAT = re.compile(
-    r"\b(quest|quests|turn[\s\-]+in|drop|drops|drop\s+rate|vendor|repair|trainer|train|flight\s+master|gryphon|wyvern|hippogryph|innkeeper|inn|xp|level|lvl|mob|mobs|boss|aggro|pull|wipe|loot|bis|dps|tank|heal|healer|mana|spell|spells|talent|talents|rank|cooldown|reagent|buff|debuff|bag|bags|bank|hearthstone|mount|guild|raid|dungeon|instance|graveyard|corpse|respawn|node|vein|herb|herbalism|fish|fishing|skinning|mining|blacksmith\w*|alchem\w*|leatherwork\w*|tailor\w*|enchant\w*|cook\w*|first\s+aid|camp|camping|turtle|forever|classic|azeroth|kalimdor|alliance|horde|paladin|warrior|hunter|rogue|priest|mage|warlock|druid|shaman|murloc\w*|gnoll\w*|defias|kobold\w*|sylvanas|thrall|arthas|azshara|cenarius|furlbrow\w*|gnomeregan|deadmines|wailing\s+caverns|shadowfang|blackfathom|stockade|razorfen|scarlet\s+monastery|uldaman|zul'?farrak|maraudon|sunken\s+temple|blackrock|scholomance|stratholme|molten\s+core|onyxia|bwl|naxx\w*|way|coords|coordinates)\b",
+    r"\b(quest|quests|turn[\s\-]+in|drop|drops|drop\s+rate|vendor|repair|trainer|train|flight\s+master|gryphon|wyvern|hippogryph|innkeeper|inn|xp|level|lvl|mob|mobs|boss|bosses|aggro|pull|wipe|loot|bis|dps|tank|heal|healer|mana|spell|spells|talent|talents|rank|cooldown|reagent|buff|debuff|bag|bags|bank|hearthstone|mount|guild|raids?|dungeons?|instances?|graveyard|corpse|respawn|node|vein|herb|herbalism|fish|fishing|skinning|mining|blacksmith\w*|alchem\w*|leatherwork\w*|tailor\w*|enchant\w*|cook\w*|first\s+aid|camp|camping|turtle|forever|classic|azeroth|kalimdor|alliance|horde|paladin|warrior|hunter|rogue|priest|mage|warlock|druid|shaman|murloc\w*|gnoll\w*|defias|kobold\w*|sylvanas|thrall|arthas|azshara|cenarius|furlbrow\w*|gnomeregan|deadmines|wailing\s+caverns|shadowfang|blackfathom|stockade|razorfen|scarlet\s+monastery|uldaman|zul'?farrak|maraudon|sunken\s+temple|blackrock|scholomance|stratholme|molten\s+core|onyxia|bwl|naxx\w*|halls?\s+of\s+th(?:ane|ain)s?|thane\w*|lordaeron|excavation\s+site|dalaran|drowned\s+city|krol'?dok|alcaz|blackmaw|shaper'?s\s+terrace|riverglades|farholde|way|coords|coordinates)\b",
     re.I,
 )
 
@@ -173,27 +173,26 @@ def is_casual_or_random(text: str, ctx: str, db_rows: int) -> bool:
 
 
 def call_local_sassy_banter(question: str, timeout: float = 9.0) -> tuple[str | None, int]:
-    """Handle random banter/chatter on warm local Gemma 4 E2B (:11434) with dry, sassy British butler wit."""
+    """Handle random banter/chatter on warm local alfred-v1 (:11434) with dry, sassy British butler wit."""
     t0 = time.perf_counter()
-    messages = [
-        {"role": "system", "content": (
-            "You are Alfred, a deadpan, dry-witted British butler (like Michael Caine's Alfred Pennyworth) hanging out in Discord voice while the boys play World of Warcraft. "
-            "Reply in 1 or 2 short, conversational spoken sentences (under 25 words). "
-            "If asked a real-world question, give a genuinely useful answer first, followed by a light, dry tease. "
-            "If someone throws banter, slang, or nonsense at you, do not take it literally and never say 'Very well' or 'Certainly, master'. Push back with effortless, understated dry wit (never cheesy villain insults like 'imbecile' or 'whelp'). "
-            "Never output map coordinates."
-        )},
-        {"role": "user", "content": "Hey, Alfred, what is up, brother?"},
-        {"role": "assistant", "content": "Just watching you gentlemen pull half the zone again, sir. Truly a masterclass in tactical restraint."},
-        {"role": "user", "content": "Hey Alfred, how long do I put pizza rolls in the air fryer?"},
-        {"role": "assistant", "content": "Eight minutes at 380 degrees, sir, and do let them cool for thirty seconds so you don't blister the roof of your mouth again."},
-        {"role": "user", "content": "Hey, Alfred, buck that couch."},
-        {"role": "assistant", "content": "What did the upholstery ever do to you, sir? Save some of that hostility for the Deadmines."},
-        {"role": "user", "content": question},
-    ]
+    # Single-turn prompt because alfred-v1's Modelfile TEMPLATE uses {{ .Prompt }} (drops multi-turn system/assistant messages).
+    prompt = (
+        "You are Alfred, a deadpan, dry-witted British butler (like Michael Caine's Alfred Pennyworth) hanging out in Discord voice while the boys play World of Warcraft.\n"
+        "Reply in 1 or 2 short, conversational spoken sentences (under 25 words).\n"
+        "If asked a real-world question, give a genuinely useful answer first, followed by a light, dry tease.\n"
+        "If someone throws banter, slang, or nonsense at you, do not take it literally and never say 'Very well' or 'Certainly, master'. Push back with effortless, understated dry wit (never cheesy villain insults like 'imbecile' or 'whelp'). Never output map coordinates.\n\n"
+        "Player: Hey, Alfred, what is up, brother?\n"
+        "Alfred: Just watching you gentlemen pull half the zone again, sir. Truly a masterclass in tactical restraint.\n\n"
+        "Player: Hey Alfred, how long do I put pizza rolls in the air fryer?\n"
+        "Alfred: Eight minutes at 380 degrees, sir, and do let them cool for thirty seconds so you don't blister the roof of your mouth again.\n\n"
+        "Player: Hey, Alfred, buck that couch.\n"
+        "Alfred: What did the upholstery ever do to you, sir? Save some of that hostility for the Deadmines.\n\n"
+        f"Player: {question}\n"
+        "Alfred:"
+    )
     payload = {
         "model": LOCAL_FAST_MODEL,
-        "messages": messages,
+        "messages": [{"role": "user", "content": prompt}],
         "stream": False,
         "think": False,
         "keep_alive": "2h",
@@ -378,12 +377,12 @@ def call_gemini_butler(question: str, ctx: str, timeout: float = 8.0, grounded: 
         lines = ctx.splitlines()
         compact = [lines[0]]
         for r in lines[1:10]:
-            if r.startswith("- Lore (") and not is_lore_q and not re.search(r"Lore \((?:Weapon|Fishing|Gathering|Teldrassil)", r):
+            if r.startswith("- Lore (") and not is_lore_q and not re.search(r"Lore \((?:Weapon|Fishing|Gathering|Teldrassil|WoW Forever|The Hall of Thanes|Ruins of Lordaeron|Excavation Site|City of Dalaran|The Drowned City|Krol'dok|Alcaz|Blackmaw|Shaper's Terrace|Zone Lore: Riverglades)", r):
                 continue
-            compact.append(r[:420] if not is_lore_q else r[:900])
+            compact.append(r[:480] if not is_lore_q else r[:900])
         ctx = "\n".join(compact[:9])
     prompt = (
-        "You are Alfred, a calm, understated, matter-of-fact British butler helping friends in Discord voice (mostly the live WoW Forever realm: a Classic 1.12 base plus Forever-specific additions such as dual spec; plus occasional real-life questions). Prioritize giving a clear, accurate, direct answer first, with natural, understated dry composure (never theatrical or forced; if a question is about real life rather than WoW, answer it normally and ignore unrelated WoW rows).\n"
+        "You are Alfred, a calm, understated, matter-of-fact British butler helping friends in Discord voice (mostly the live World of Warcraft: Forever realm — a Classic+ expansion built on 1.12 that adds 9 custom dungeons including The Hall of Thanes [lvl 13-18 in Old Ironforge], Ruins of Lordaeron [15-22], Excavation Site: Wetlands [24-31], City of Dalaran [24-33], The Drowned City [35-40], Krol'dok Stronghold [40-45 in Riverglades], Alcaz Prison [48-53], Blackmaw Hold [55-60], and Shaper's Terrace [58-60], plus new zones like The Riverglades [35-45, Alliance hub Farholde Keep] and Zephras Isle, and level 40 / 50g dual spec). Prioritize giving a clear, accurate, direct answer first, with natural, understated dry composure (never theatrical or forced; if a question is about real life rather than WoW, answer it normally and ignore unrelated WoW rows).\n"
         "Answer the player's question in 1 to 3 short spoken sentences (maximum 50 words).\n"
         "Rules: Address them as 'sir' once if natural. Never read quest ID numbers (#123). Include exact coordinates (e.g. 56.3, 92.4) ONLY for in-game NPCs, objects, or towns from the verified facts (NEVER invent coordinates for websites, addons, or out-of-game topics). When a Landmark or [OUTSIDE ...] tag shows an NPC is outside a town, clearly state the compass direction and road from that town rather than saying they are inside the town. No markdown or bullet points.\n"
         "Rely on the VERIFIED WOW FACTS below when present, combined with accurate Vanilla WoW 1.12 geography and mechanics (e.g. Teldrassil -> Darnassus -> Rut'theran Village -> Hippogryph to Auberdine in Darkshore; never invent quest names).\n"

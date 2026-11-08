@@ -312,7 +312,7 @@ def call_local_fast_butler(question: str, ctx: str, timeout: float = 9.0) -> tup
 
 
 
-GEMINI_MODEL = os.environ.get("VOICE_GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = os.environ.get("VOICE_GEMINI_MODEL", "gemini-3.5-flash")
 OPENCLAW_MINIMAX_QUERY = re.compile(r"\b(link\s+to|send\s+(?:a\s+|me\s+|us\s+|)?link|give\s+\w+\s+a\s+link|install\s+the\s+.*add-?on|curseforge|search\s+the\s+web|look\s+up\s+online)\b", re.I)
 
 
@@ -329,7 +329,7 @@ def get_gemini_key() -> str | None:
 
 
 def call_gemini_butler(question: str, ctx: str, timeout: float = 8.0) -> tuple[str | None, int]:
-    """Call Gemini 2.5 Flash (thinkingBudget=0, ~750ms, ~$0.00035/turn with compact RAG) for high-accuracy voice answers."""
+    """Call Gemini 3.5 Flash (thinkingBudget=0, ~750ms, ~$0.00035/turn with compact RAG) for high-accuracy voice answers."""
     t0 = time.perf_counter()
     key = get_gemini_key()
     if not key:
@@ -487,7 +487,7 @@ def main():
     if "--wake" in sys.argv and not allowed:
         return
 
-    # Option A: JEV-style Value/Complexity Gate + Live 50/50 A/B Split (Local Gemma 4 vs Cloud Gemini 2.5 Flash)
+    # Option A: JEV-style Value/Complexity Gate + Live 50/50 A/B Split (Local Gemma 4 vs Cloud Gemini 3.5 Flash)
     arm = "COMPLEX_CLOUD"
     local_ms = None
     fast_reply = None

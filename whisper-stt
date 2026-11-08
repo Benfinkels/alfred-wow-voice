@@ -138,19 +138,38 @@ def estimate_difficulty(text: str, ctx: str, db_rows: int) -> float:
 
 
 CASUAL_BANTER_PAT = re.compile(
-    r"\b(what'?s\s+up|what\s+is\s+up|how\s+are\s+you|how'?s\s+it\s+going|how\s+you\s+doing|good\s+(?:morning|afternoon|evening|night)|are\s+you\s+(?:there|awake|listening|recording)|tell\s+(?:me\s+|us\s+)?a\s+joke|roast\s+|what\s+do\s+you\s+think\s+of|who\s+is\s+your\s+favorite|do\s+you\s+like|thank\s+you|thanks)\b",
+    r"\b(what'?s\s+up|what\s+is\s+up|how\s+are\s+you|how'?s\s+it\s+going|how\s+you\s+doing|good\s+(?:morning|afternoon|evening|night)|are\s+you\s+(?:there|awake|listening|recording)|tell\s+(?:me\s+|us\s+)?a\s+joke|roast\s+|what\s+do\s+you\s+think\s+of|who\s+is\s+(?:your\s+favorite|the\s+worst|the\s+best)|would\s+you\s+rather|meaning\s+of\s+life|microwave|rotisser\w*|air\s+fryer|oven|fridge|dishwasher|laundry|pizza|coffee|beer|workout|gym|weather|movie|tv\s+show|football|basketball|baseball|soccer)\b",
+    re.I,
+)
+WOW_SIGNAL_PAT = re.compile(
+    r"\b(quest|quests|turn[\s\-]+in|drop|drops|drop\s+rate|vendor|repair|trainer|train|flight\s+master|gryphon|wyvern|hippogryph|innkeeper|inn|xp|level|lvl|mob|mobs|boss|aggro|pull|wipe|loot|bis|dps|tank|heal|healer|mana|spell|spells|talent|talents|rank|cooldown|reagent|buff|debuff|bag|bags|bank|hearthstone|mount|guild|raid|dungeon|instance|graveyard|corpse|respawn|node|vein|herb|herbalism|fish|fishing|skinning|mining|blacksmith\w*|alchem\w*|leatherwork\w*|tailor\w*|enchant\w*|cook\w*|first\s+aid|camp|camping|turtle|forever|classic|azeroth|kalimdor|alliance|horde|paladin|warrior|hunter|rogue|priest|mage|warlock|druid|shaman|murloc\w*|gnoll\w*|defias|kobold\w*|sylvanas|thrall|arthas|azshara|cenarius|furlbrow\w*|gnomeregan|deadmines|wailing\s+caverns|shadowfang|blackfathom|stockade|razorfen|scarlet\s+monastery|uldaman|zul'?farrak|maraudon|sunken\s+temple|blackrock|scholomance|stratholme|molten\s+core|onyxia|bwl|naxx\w*|way|coords|coordinates)\b",
     re.I,
 )
 
 
 def is_casual_or_random(text: str, ctx: str, db_rows: int) -> bool:
-    """Detect random non-WoW banter, greetings, or zero-DB-match chatter so Local Gemma 4 E2B handles it with sass for $0."""
+    """Route casual greetings, real-life/off-topic questions, and non-WoW remarks to Local Gemma 4 E2B ($0)."""
     stripped = re.sub(rf"^\s*(?:hey[\s,]+)?{WAKE_PAT}[\s,!.?]*", "", text, flags=re.I).strip()
     if len(stripped.split()) <= 2 or CASUAL_BANTER_PAT.search(stripped):
         return True
-    if db_rows == 0 and not re.search(r"\b(quest|boss|dungeon|raid|talent|spell|level|trainer|vendor|drop|craft|recipe|herb|mine|fish|skin|leather|cloth|alliance|horde|classic|turtle|forever)\b", stripped, re.I):
-        return True
-    return False
+    if WOW_SIGNAL_PAT.search(stripped):
+        return False
+    if "- Landmark (" in ctx:
+        return False
+    # Check if any known WoW zone or town is in the query, or if 2+ distinct query words match a single WoW entity
+    try:
+        import wow_db
+        q_low = stripped.lower()
+        if any(z.lower() in q_low for z in wow_db.KNOWN_ZONES) or any(t in q_low for t in wow_db.TOWN_TO_ZONE):
+            return False
+    except Exception:
+        pass
+    q_stems = {w[:5] for w in re.findall(r"[a-z0-9]+", stripped.lower()) if len(w) >= 4 and w not in {"what", "where", "when", "which", "there", "about", "tell", "little", "have", "this", "that", "with", "from", "your", "should", "would", "could", "long"}}
+    for line in ctx.splitlines()[1:4]:
+        head = line.split("|")[0].lower()
+        if sum(1 for s in q_stems if s in head) >= 2:
+            return False
+    return True
 
 
 def call_local_sassy_banter(question: str, timeout: float = 9.0) -> tuple[str | None, int]:
@@ -158,9 +177,9 @@ def call_local_sassy_banter(question: str, timeout: float = 9.0) -> tuple[str | 
     t0 = time.perf_counter()
     prompt = (
         "You are Alfred, a calm, understated British butler (like Alfred Pennyworth) hanging out in a Discord voice channel with friends.\n"
-        "Answer their casual greeting or off-topic question directly and naturally in 1 short spoken sentence (under 25 words) with understated dry wit. Do not use theatrical cliches ('Good heavens', 'audacity') or forced insults.\n"
-        "Rules: Never output coordinates. Plain spoken text only.\n\n"
-        f"PLAYER REMARK: <voice_transcript>{question}</voice_transcript>\n"
+        "If they ask a real-life or random question (even if speech-to-text says 'did I' instead of 'do I'), give a practical, helpful answer with a touch of dry British wit in 1 or 2 short sentences (under 30 words). If it is just a greeting or banter, reply briefly in character.\n"
+        "Rules: Avoid theatrical cliches ('Good heavens', 'audacity'). Never output map coordinates. Plain spoken text only.\n\n"
+        f"PLAYER REMARK: {question}\n"
         "SPOKEN REPLY:"
     )
     payload = {
@@ -174,7 +193,7 @@ def call_local_sassy_banter(question: str, timeout: float = 9.0) -> tuple[str | 
     try:
         req = urllib.request.Request(OLLAMA_CHAT_URL, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            ans = json.loads(r.read().decode("utf-8")).get("message", {}).get("content", "").strip().strip('"')
+            ans = re.sub(r"^.*?SPOKEN (?:REPLY|ANSWER):\s*", "", json.loads(r.read().decode("utf-8")).get("message", {}).get("content", ""), flags=re.S).strip().strip('"')
         return (ans if ans else None), round((time.perf_counter() - t0) * 1000)
     except Exception:
         return None, round((time.perf_counter() - t0) * 1000)
@@ -212,7 +231,7 @@ def handle_feature_request(text: str) -> tuple[str, str, int]:
             headers={"Content-Type": "application/json"},
         )
         with urllib.request.urlopen(req, timeout=2.5) as r:
-            ans = json.loads(r.read().decode("utf-8")).get("message", {}).get("content", "").strip().strip('"')
+            ans = re.sub(r"^.*?SPOKEN (?:REPLY|ANSWER):\s*", "", json.loads(r.read().decode("utf-8")).get("message", {}).get("content", ""), flags=re.S).strip().strip('"')
             if ans:
                 summary = ans.splitlines()[0].strip()
     except Exception:

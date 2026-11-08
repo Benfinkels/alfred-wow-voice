@@ -11,6 +11,7 @@ ARM_LABELS = {
     "LOCAL_BANTER_GEMMA4": "Gemma 4 E2B (Local Banter, $0)",
     "A_LOCAL_GEMMA4":      "Gemma 4 E2B (Local A/B, $0)",
     "COMPLEX_GEMINI":      "Gemini 3.5 Flash (~$0.00035)",
+    "RESEARCH_GEMINI":     "Gemini 3.5 Flash + Search (~$0.0005)",
     "B_CLOUD_GEMINI":      "Gemini 3.5 Flash (A/B, ~$0.00035)",
     "A_ESCALATED_GEMINI":  "Gemini 3.5 Flash (Escalated)",
     "OPENCLAW_MINIMAX":    "MiniMax-M2.7 (OpenClaw Tools)",

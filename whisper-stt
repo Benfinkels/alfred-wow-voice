@@ -78,9 +78,9 @@ STT_SOCK = os.environ.get("WHISPER_SOCK", "/tmp/whisper_stt.sock")
 CTRL_SOCK = os.environ.get("VOICE_CTRL_SOCK", "/tmp/alfred_voice_ctrl.sock")
 INTERRUPT_CMD = os.environ.get("VOICE_INTERRUPT_CMD", "")
 CONTEXT_CMD = os.environ.get("VOICE_CONTEXT_CMD", "")
-AB_MODE = os.environ.get("VOICE_AB_MODE", "cloud")  # "cloud" (Gemini for all WoW), "local" (Gemma for D(x)<0.28), or "ab" (50/50); Gemma E2B scored 3-4/10 on WoW lookups (2026-11-08)
+AB_MODE = os.environ.get("VOICE_AB_MODE", "local")  # "local" (narrow lookups on the local model, escalate to Gemini), "cloud" (Gemini for all WoW), or "ab" (50/50)
 OLLAMA_CHAT_URL = os.environ.get("OLLAMA_CHAT_URL", "http://127.0.0.1:11434/api/chat")
-LOCAL_FAST_MODEL = os.environ.get("VOICE_LOCAL_MODEL", "gemma4:e2b-it-q4_K_M")
+LOCAL_FAST_MODEL = os.environ.get("VOICE_LOCAL_MODEL", "alfred-v1:latest")  # Gemma 4 7.5B text-only, 6.2GB fully on the RTX 2080
 DAILY_TURNS = int(os.environ.get("VOICE_DAILY_TURNS", "120"))
 MIN_GAP_S = 5
 FOLLOWUP_WINDOW_S = 45
@@ -208,9 +208,19 @@ def call_local_sassy_banter(question: str, timeout: float = 9.0) -> tuple[str | 
         return None, round((time.perf_counter() - t0) * 1000)
 
 
+ROLE_GUARDS = (  # (question pattern, NPC title pattern the answer must come from)
+    (r"\b(arrows?|bullets?|ammo|bowyer)\b", r"Bowyer|Gun|Ammo"),
+    (r"\binn(?:keeper)?\b", r"Innkeeper"),
+    (r"\b(flight\s+master|gryphon|wyvern|hippogryph)\b", r"Flight Master|Gryphon|Wyvern|Hippogryph"),
+    (r"\brepair\b", r"Repair"),
+)
+
+
 def is_simple_wow_lookup(text: str, ctx: str, db_rows: int) -> bool:
-    """Route to local Gemma 4 E2B only when ATLAS 3-Signal Difficulty D(x) < 0.28 (high confidence, low complexity)."""
-    return estimate_difficulty(text, ctx, db_rows) < 0.28
+    """Route to the local model for narrow "where is / who sells / what drops" lookups that ATLAS D(x) scores below 0.75.
+    alfred-v1 (Gemma 4 7.5B) scored 10/10 on narrow lookups vs Gemma 4 E2B 6/10 (2026-11-08 bench).
+    "what level" / "what do I do with" / "how do I" stay on Gemini: they need reasoning or rows the DB ranks poorly."""
+    return bool(NARROW_LOOKUP_PAT.search(text)) and not re.search(r"\b(what\s+level|what\s+do\s+i\s+do\s+with|how\s+do\s+(?:i|we))\b", text, re.I) and estimate_difficulty(text, ctx, db_rows) < 0.75
 
 
 FEATURE_LOG_PATH = os.environ.get("VOICE_FEATURE_LOG", os.path.expanduser("~/.openclaw/logs/feature-requests.jsonl"))
@@ -267,7 +277,7 @@ def handle_feature_request(text: str) -> tuple[str, str, int]:
 
 
 def call_local_fast_butler(question: str, ctx: str, timeout: float = 9.0) -> tuple[str | None, int]:
-    """Call warm Gemma 4 E2B on Sheldon RTX 2080 (:11434) with Verify-Then-Escalate guard."""
+    """Call the warm local model (alfred-v1) on Sheldon RTX 2080 (:11434) with Verify-Then-Escalate guards."""
     t0 = time.perf_counter()
     is_lore_q = bool(re.search(r"\b(lore|history|story|who\s+is|tell\s+(?:me|us)\s+(?:a\s+little\s+bit\s+)?about)\b", question, re.I))
     raw_rows = ctx.splitlines()[1:]
@@ -302,13 +312,41 @@ def call_local_fast_butler(question: str, ctx: str, timeout: float = 9.0) -> tup
             data = json.loads(r.read().decode("utf-8")); _LAST_TOKENS.update({"in_tok": data.get("prompt_eval_count", 0), "out_tok": data.get("eval_count", 0)})
         ans = data.get("message", {}).get("content", "").strip().strip('"')
         ms = round((time.perf_counter() - t0) * 1000)
-        if not ans or "ESCALATE" in ans.upper() or UNCERTAIN_REPLY.search(ans) or len(ans) > 420:
-            return None, ms
-        if re.search(r"\b(where|closest|located)\b", question, re.I) and re.search(r"\(\d+\.\d+,\s*\d+\.\d+\)", facts) and not re.search(r"\b\d{1,2}(?:\.\d+)?\s*,\s*\d{1,2}(?:\.\d+)?\b", ans):
-            return None, ms
-        return ans, ms
+        return (ans if local_answer_ok(question, facts, ans) else None), ms
     except Exception:
         return None, round((time.perf_counter() - t0) * 1000)
+
+
+def local_answer_ok(question: str, facts: str, ans: str) -> bool:
+    """Verify-then-escalate: reject local answers that dodge, omit coordinates, borrow landmark coords, or name the wrong role."""
+    if not ans or "ESCALATE" in ans.upper() or UNCERTAIN_REPLY.search(ans) or len(ans) > 420:
+        return False
+    if re.search(r"\b(where|closest|located)\b", question, re.I) and re.search(r"\(\d+\.\d+,\s*\d+\.\d+\)", facts) and not re.search(r"\b\d{1,2}(?:\.\d+)?\s*,\s*\d{1,2}(?:\.\d+)?\b", ans):
+        return False
+    # Every spoken coordinate must be some NPC/object's own position, not a town-hub/landmark coordinate it borrowed.
+    own = set(re.findall(r"\|[^|\[\]]*?\((\d+\.\d+),\s*(\d+\.\d+)\)", facts))
+    if any((x, y) not in own for x, y in re.findall(r"(\d{1,2}\.\d)\s*,\s*(\d{1,2}\.\d)", ans)):
+        return False
+    # Role questions ("buy arrows", "innkeeper") must name an NPC whose title actually has that role (not a nearby Trade Supplies vendor).
+    for q_pat, role_pat in ROLE_GUARDS:
+        if re.search(q_pat, question, re.I):
+            names = re.findall(rf"NPC: ([^<|]+?) <[^>]*(?:{role_pat})", facts, re.I)
+            if names and not any(n.strip().split()[0].lower() in ans.lower() for n in names):
+                return False
+    return True
+
+
+if os.environ.get("WHISPER_STT_SELFTEST"):
+    _F = ("Landmark (Sentinel Hill): Located in Westfall at (56.5, 52.6)\n"
+          "- NPC: William MacGregor <Bowyer [Repair Vendor]> (#1668) | Lvl 15 | Westfall (57.7, 53.9) [INSIDE Sentinel Hill (56.5, 52.6)]\n"
+          "- NPC: Gina MacGregor <Trade Supplies [Vendor]> (#843) | Lvl 15 | Westfall (57.6, 54.0)")
+    _Q = "where can I buy arrows near Sentinel Hill"
+    assert local_answer_ok(_Q, _F, "William MacGregor sells arrows at 57.7, 53.9, sir.")
+    assert not local_answer_ok(_Q, _F, "Gina MacGregor at 57.6, 54.0 sells trade supplies.")  # wrong role
+    assert not local_answer_ok(_Q, _F, "William MacGregor is at 56.5, 52.6.")  # borrowed landmark coords
+    assert not local_answer_ok(_Q, _F, "William MacGregor sells arrows nearby.")  # where-question with no coords
+    assert not local_answer_ok(_Q, _F, "ESCALATE")
+    print("whisper-stt self-test ok")
 
 
 

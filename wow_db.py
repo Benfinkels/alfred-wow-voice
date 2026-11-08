@@ -538,6 +538,13 @@ def auto_context(question: str, db_path: str = DEFAULT_DB) -> str:
         if re.search(r"\b(repair|vendor|ammo|arrows?|bullets?|buy|sell|merchant|inn|innkeeper|flight|gryphon|wyvern|stable|trainer|smith|bowyer|armorer|weaponsmith|quartermaster|supplies|goods|leatherwork|skinning|cooking|alchemy|herbalism|mining|tailoring|enchanting|first\s+aid|fishing|warrior|rogue|priest|hunter|druid|mage|warlock|paladin|shaman)\b", q_lower):
             prof_m = re.search(r"\b(leatherwork|skin|cook|alchem|herb|min|tailor|enchant|first\s+aid|fish|warrior|rogue|priest|hunter|druid|mage|warlock|paladin|shaman)", q_lower)
             prof_stem = prof_m.group(1) if prof_m else "___none___"
+            if not prof_m:
+                # Rank the requested service role first so LIMIT 18 can't drop it (e.g. Innkeeper Farley in Goldshire).
+                for pat, role in ((r"\binn(?:keeper)?\b", "Innkeeper"), (r"\b(?:flight|gryphon|wyvern|hippogryph)\b", "Flight Master"),
+                                  (r"\b(?:arrows?|bullets?|ammo|bowyer)\b", "Bowyer"), (r"\brepair\b", "Repair"), (r"\bstable\b", "Stable")):
+                    if re.search(pat, q_lower):
+                        prof_stem = role
+                        break
             want_trainer = 1 if re.search(r"\b(trainer|train|learn|leatherwork|skin|cook|alchem|herb|min|tailor|enchant|first\s+aid)\b", q_lower) else 0
             npc_rows = conn.execute(
                 """

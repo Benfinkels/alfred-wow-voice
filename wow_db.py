@@ -44,6 +44,9 @@ STOPWORDS = {
     "roleplay", "rollplay", "server", "blind", "impression", "complete", "story",
     "brother", "bro", "dude", "mate", "buddy", "pal", "chief", "homie", "folks",
     "doing", "hows", "whats", "sup", "hello", "hi", "yo", "today", "tonight",
+    "keep", "keeping", "kept", "bag", "bags", "inventory", "bank", "order", "able",
+    "use", "used", "using", "need", "needed", "power", "microwave", "rotisserie",
+    "spell", "spells", "cast", "casting", "learn", "learned", "slot", "slots",
 }
 
 TOWN_TO_ZONE = {
@@ -139,6 +142,7 @@ KNOWN_ZONES = [
     "Blackrock Depths", "Blackrock Spire", "Scholomance", "Stratholme",
     "Blacksmithing", "Alchemy", "Engineering", "Leatherworking", "Tailoring",
     "Cooking", "First Aid", "Fishing", "Herbalism", "Camping",
+    "Paladin", "Warrior", "Hunter", "Rogue", "Priest", "Mage", "Warlock", "Druid", "Shaman",
 ]
 
 CORRECTIONS_PATH = os.path.expanduser("~/.openclaw/logs/corrections.jsonl")
@@ -247,14 +251,26 @@ def query_fts(conn: sqlite3.Connection, text: str, limit: int = 8) -> list[str]:
                 results.append(r["summary"])
 
     if fts_terms and len(results) < 3:
-        or_q = " OR ".join(f'name : "{t[:5] if len(t) >= 6 else t}"*' for t in fts_terms[:5])
-        for r in cur.execute(
-            "SELECT summary FROM wow_fts WHERE wow_fts MATCH ? ORDER BY rank LIMIT ?",
-            (or_q, limit),
-        ):
-            if r["summary"] not in seen:
-                seen.add(r["summary"])
-                results.append(r["summary"])
+        or_q = " OR ".join(f'name : "{t}"' for t in fts_terms[:6] if len(t) >= 4)
+        if or_q:
+            cand_rows = cur.execute(
+                "SELECT name, summary FROM wow_fts WHERE wow_fts MATCH ? LIMIT 40",
+                (or_q,),
+            ).fetchall()
+            scored = []
+            for r in cand_rows:
+                n_low, s_low = r["name"].lower(), r["summary"].lower()
+                if "monster - item" in n_low or "icoke" in s_low:
+                    continue
+                n_hits = sum(1 for t in fts_terms if re.search(rf"\b{re.escape(t)}\b", n_low))
+                s_hits = sum(1 for t in fts_terms if t[:5] in s_low)
+                if len(fts_terms) == 1 or n_hits >= 2 or s_hits >= 2 or any(re.search(rf"\b{re.escape(t)}\b", n_low) for t in fts_terms if len(t) >= 6):
+                    scored.append((n_hits, s_hits, -len(n_low), r["summary"]))
+            scored.sort(reverse=True)
+            for _, _, _, rsum in scored[:limit]:
+                if rsum not in seen:
+                    seen.add(rsum)
+                    results.append(rsum)
 
     # 3. Fast difflib fuzzy proper-noun fallback when exact/stem FTS finds nothing
     if fts_terms and not results:
@@ -283,6 +299,7 @@ LORE_STOPWORDS = STOPWORDS | {
     "unabridged", "describe", "explain", "detail", "much", "possible", "everything",
     "interesting", "piece", "something", "most", "people", "anyone", "nobody",
     "knows", "fact", "facts", "cool", "fun", "random", "weird", "obscure", "classic",
+    "level", "levels",
 }
 
 STT_ALIASES = {
@@ -334,6 +351,7 @@ STT_ALIASES = {
     r"\barchmaid\b": "Archmage",
     r"\btheocratus(?:'s)?\b": "Theocritus",
     r"\bdry\s+times\b": "Dry Times",
+    r"\bsymbol\s+of\s+hope\b": "Symbol of Life",
 }
 
 
@@ -406,18 +424,19 @@ def query_lore(conn: sqlite3.Connection, text: str, limit: int = 2) -> list[str]
                 continue
             for r in cur.execute(
                 """
-                SELECT title, summary FROM lore
+                SELECT title, aliases, summary FROM lore
                 WHERE lower(title) = ?
                    OR lower(title) = ?
                    OR lower(title) LIKE ?
                    OR lower(title) LIKE ?
                    OR lower(aliases) LIKE ?
                 ORDER BY (lower(title) != ? AND lower(title) != ?), length(title)
-                LIMIT 2
+                LIMIT 6
                 """,
                 (t, stem, f"{stem} %", f"% {stem}%", f"%{stem}%", t, stem),
             ):
-                if r["title"] not in seen:
+                blob_w = f"{r['title']} {r['aliases'] or ''}".lower()
+                if r["title"] not in seen and re.search(rf"\b{re.escape(stem)}s?\b", blob_w) and len(results) < limit:
                     seen.add(r["title"])
                     results.append(f"Lore ({r['title']}): {r['summary']}")
         # 2. Fuzzy title word match for STT phonetic spellings (e.g. "Silvanus" -> "Sylvanas")
@@ -437,11 +456,11 @@ def query_lore(conn: sqlite3.Connection, text: str, limit: int = 2) -> list[str]
                             if r["title"] not in seen:
                                 seen.add(r["title"])
                                 results.append(f"Lore ({r['title']}): {r['summary']}")
-        # 3. FTS5 fallback on lore_fts (only for tokens >= 5 chars to avoid 4-char noise)
+        # 3. FTS5 fallback on lore_fts (only for full tokens >= 5 chars to avoid prefix noise)
         if len(results) < limit:
             fts_terms = [re.sub(r"[^a-z0-9]", "", t) for t in tokens if len(re.sub(r"[^a-z0-9]", "", t)) >= 5]
             if fts_terms:
-                stem_q = " OR ".join(f'title : "{t[:5]}"*' for t in fts_terms[:4])
+                stem_q = " OR ".join(f'title : "{t}"' for t in fts_terms[:4])
                 for r in cur.execute(
                     "SELECT title, summary FROM lore_fts WHERE lore_fts MATCH ? ORDER BY rank LIMIT ?",
                     (stem_q, limit),
@@ -481,7 +500,11 @@ def auto_context(question: str, db_path: str = DEFAULT_DB) -> str:
         m = re.search(rf"\b{re.escape(town)}\b", q_for_zone)
         if m and all(z != ez for _, ez in zone_hits):
             zone_hits.append((m.start(), z))
-    PROF_ZONES = {"Blacksmithing", "Alchemy", "Engineering", "Leatherworking", "Tailoring", "Cooking", "First Aid", "Fishing", "Herbalism", "Camping"}
+    PROF_ZONES = {
+        "Blacksmithing", "Alchemy", "Engineering", "Leatherworking", "Tailoring",
+        "Cooking", "First Aid", "Fishing", "Herbalism", "Camping",
+        "Paladin", "Warrior", "Hunter", "Rogue", "Priest", "Mage", "Warlock", "Druid", "Shaman",
+    }
     zone_hits.sort(key=lambda x: (x[1] in PROF_ZONES, x[0]))
     matched_zones = [z for _, z in zone_hits]
     matched_zone = matched_zones[0] if matched_zones else None
@@ -499,6 +522,17 @@ def auto_context(question: str, db_path: str = DEFAULT_DB) -> str:
     is_lore_q = bool(re.search(r"\b(lore|history|story|who\s+is|origin|origins|background|describe|explain|tell\s+me\s+about)\b", q_lower))
     lore_rows = query_lore(conn, question, limit=2 if is_lore_q or not matched_zones else 1)
     lines.extend(lore_rows)
+
+    remainder = re.sub(r"\b(?:level|lvl)?\s*\d+\b", " ", q_lower)
+    if matched_zone:
+        for part in matched_zone.lower().split():
+            remainder = re.sub(rf"\b{re.escape(part)}\b", " ", remainder)
+
+    # If matched_zone is a class/profession category (not a geographic zone), prioritize specific FTS entity matches first
+    if matched_zone in PROF_ZONES:
+        for r in query_fts(conn, remainder, limit=6):
+            if r not in lines:
+                lines.append(r)
 
     if matched_zone:
         if re.search(r"\b(repair|vendor|ammo|arrows?|bullets?|buy|sell|merchant|inn|innkeeper|flight|gryphon|wyvern|stable|trainer|smith|bowyer|armorer|weaponsmith|quartermaster|supplies|goods|leatherwork|skinning|cooking|alchemy|herbalism|mining|tailoring|enchanting|first\s+aid|fishing|warrior|rogue|priest|hunter|druid|mage|warlock|paladin|shaman)\b", q_lower):
@@ -550,10 +584,6 @@ def auto_context(question: str, db_path: str = DEFAULT_DB) -> str:
                     lines.append(r)
 
     # Also check specific entity keywords (removing the matched zone name and level numbers)
-    remainder = re.sub(r"\b(?:level|lvl)?\s*\d+\b", " ", q_lower)
-    if matched_zone:
-        for part in matched_zone.lower().split():
-            remainder = re.sub(rf"\b{re.escape(part)}\b", " ", remainder)
     fts_rows = query_fts(conn, remainder, limit=6)
     for r in fts_rows:
         if r not in lines:

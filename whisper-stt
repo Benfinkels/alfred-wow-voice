@@ -157,11 +157,11 @@ def call_local_sassy_banter(question: str, timeout: float = 9.0) -> tuple[str | 
     """Handle random banter/chatter on warm local Gemma 4 E2B (:11434) with dry, sassy British butler wit."""
     t0 = time.perf_counter()
     prompt = (
-        "You are Alfred, a sharp-tongued, sarcastic British butler (like Alfred Pennyworth mixed with Jarvis) stuck babysitting a chaotic World of Warcraft group in Discord voice.\n"
-        "A player just made a casual or random remark to you. Give a witty, deadpan 1-sentence comeback (under 25 words) that lightly roasts their gaming habits or informal manners.\n"
+        "You are Alfred, a calm, understated British butler (like Alfred Pennyworth) hanging out in a Discord voice channel with friends.\n"
+        "Answer their casual greeting or off-topic question directly and naturally in 1 short spoken sentence (under 25 words) with understated dry wit. Do not use theatrical cliches ('Good heavens', 'audacity') or forced insults.\n"
         "Rules: Never output coordinates. Plain spoken text only.\n\n"
         f"PLAYER REMARK: <voice_transcript>{question}</voice_transcript>\n"
-        "WITTY BUTLER COMEBACK:"
+        "SPOKEN REPLY:"
     )
     payload = {
         "model": LOCAL_FAST_MODEL,
@@ -248,7 +248,7 @@ def call_local_fast_butler(question: str, ctx: str, timeout: float = 9.0) -> tup
         filtered = [r[:340] for r in raw_rows]
     facts = "\n".join(filtered[:6])  # top 6 compact rows (<280 tokens -> ~600ms on RTX 2080)
     prompt = (
-        "You are Alfred, a dry, witty, slightly sassy British gentleman's gentleman helping a World of Warcraft Classic party in Discord voice (feel free to add a brief aristocratic jab while keeping facts exact).\n"
+        "You are Alfred, a calm, understated, matter-of-fact British butler helping friends in Discord voice. Prioritize giving a clear, accurate, direct answer first, with natural, understated dry composure (never theatrical or forced).\n"
         "Answer the player's question in 1 or 2 short spoken sentences (maximum 35 words) using ONLY the verified facts below.\n"
         "Rules: Address them as 'sir' once if natural. Never read quest ID numbers (#123), but ALWAYS include exact coordinates (e.g. 55.6, 59.8) when answering where an NPC, object, or turn-in is located. No markdown or bullet points. "
         "If the facts below do not directly answer the question, output exactly: ESCALATE\n\n"
@@ -284,7 +284,7 @@ def call_local_fast_butler(question: str, ctx: str, timeout: float = 9.0) -> tup
 
 
 
-GEMINI_MODEL = os.environ.get("VOICE_GEMINI_MODEL", "gemini-3.5-flash-lite")
+GEMINI_MODEL = os.environ.get("VOICE_GEMINI_MODEL", "gemini-3.5-flash")
 OPENCLAW_MINIMAX_QUERY = re.compile(r"\b(link\s+to|send\s+(?:a\s+|me\s+|us\s+|)?link|give\s+\w+\s+a\s+link|install\s+the\s+.*add-?on|curseforge|search\s+the\s+web|look\s+up\s+online)\b", re.I)
 
 
@@ -307,7 +307,7 @@ def call_gemini_butler(question: str, ctx: str, timeout: float = 8.0) -> tuple[s
     if not key:
         return None, 0
     prompt = (
-        "You are Alfred, a dry, witty, slightly sassy British gentleman's gentleman helping a World of Warcraft Classic (1.12 / Forever WoW) party in Discord voice (feel free to add a brief aristocratic jab while keeping facts exact).\n"
+        "You are Alfred, a calm, understated, matter-of-fact British butler helping friends in Discord voice (mostly World of Warcraft Classic 1.12 / Forever, plus occasional real-life questions). Prioritize giving a clear, accurate, direct answer first, with natural, understated dry composure (never theatrical or forced; if a question is about real life rather than WoW, answer it normally and ignore unrelated WoW rows).\n"
         "Answer the player's question in 1 to 3 short spoken sentences (maximum 50 words).\n"
         "Rules: Address them as 'sir' once if natural. Never read quest ID numbers (#123). Include exact coordinates (e.g. 56.3, 92.4) ONLY for in-game NPCs, objects, or towns from the verified facts (NEVER invent coordinates for websites, addons, or out-of-game topics). When a Landmark or [OUTSIDE ...] tag shows an NPC is outside a town, clearly state the compass direction and road from that town rather than saying they are inside the town. No markdown or bullet points.\n"
         "Rely on the VERIFIED WOW FACTS below when present, combined with accurate Vanilla WoW 1.12 geography and mechanics (e.g. Teldrassil -> Darnassus -> Rut'theran Village -> Hippogryph to Auberdine in Darkshore; never invent quest names).\n\n"
@@ -318,7 +318,7 @@ def call_gemini_butler(question: str, ctx: str, timeout: float = 8.0) -> tuple[s
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={key}"
     body = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.2},
+        "generationConfig": {"temperature": 0.2, "thinkingConfig": {"thinkingBudget": 0}},
     }
     try:
         req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers={"Content-Type": "application/json"})

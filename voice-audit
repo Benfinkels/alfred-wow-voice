@@ -72,7 +72,10 @@ if woke_only:
         in_t = r.get("in_tok") or (145 if "BANTER" in arm else (880 if "GEMINI" in arm else 18500))
         out_t = r.get("out_tok") or max(1, round(len(tts) / 3.8))
         cost_str = f"${(in_t * 0.30 + out_t * 2.50) / 1e6:.5f}" if "GEMINI" in arm else "$0.00000"
-        print(f"[{r['ts']}]  {label} | STT: {r.get('ms')}ms | LLM: {llm_ms} | Tokens: {in_t} in / {out_t} out ({cost_str}) | DB: {r.get('db_rows', 0)} rows")
+        s_tag = f" | Searches: {r['searches']}" if r.get("searches") is not None else ""
+        print(f"[{r['ts']}]  {label} | STT: {r.get('ms')}ms | LLM: {llm_ms} | Tokens: {in_t} in / {out_t} out ({cost_str}) | DB: {r.get('db_rows', 0)} rows{s_tag}")
+        if r.get("search_queries"):
+            print(f"  SEO Queries: {', '.join(r['search_queries'])}")
         print(f"  Q: {r.get('text', '')}")
         print(f"  A: {tts or '(no spoken reply)'}\n")
     sys.exit(0)

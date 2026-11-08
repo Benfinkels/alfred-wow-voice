@@ -42,6 +42,8 @@ STOPWORDS = {
     "works", "working", "drop", "dropping", "dropped", "more", "less", "very", "really",
     "also", "too", "two", "one", "three", "four", "five", "specific", "specifically",
     "roleplay", "rollplay", "server", "blind", "impression", "complete", "story",
+    "brother", "bro", "dude", "mate", "buddy", "pal", "chief", "homie", "folks",
+    "doing", "hows", "whats", "sup", "hello", "hi", "yo", "today", "tonight",
 }
 
 TOWN_TO_ZONE = {

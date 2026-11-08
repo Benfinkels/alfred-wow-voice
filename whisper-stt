@@ -137,6 +137,49 @@ def estimate_difficulty(text: str, ctx: str, db_rows: int) -> float:
     return 0.40 * (1.0 - s_p) + 0.30 * (1.0 - r_c) + 0.30 * q_c
 
 
+CASUAL_BANTER_PAT = re.compile(
+    r"\b(what'?s\s+up|what\s+is\s+up|how\s+are\s+you|how'?s\s+it\s+going|how\s+you\s+doing|good\s+(?:morning|afternoon|evening|night)|are\s+you\s+(?:there|awake|listening|recording)|tell\s+(?:me\s+|us\s+)?a\s+joke|roast\s+|what\s+do\s+you\s+think\s+of|who\s+is\s+your\s+favorite|do\s+you\s+like|thank\s+you|thanks)\b",
+    re.I,
+)
+
+
+def is_casual_or_random(text: str, ctx: str, db_rows: int) -> bool:
+    """Detect random non-WoW banter, greetings, or zero-DB-match chatter so Local Gemma 4 E2B handles it with sass for $0."""
+    stripped = re.sub(rf"^\s*(?:hey[\s,]+)?{WAKE_PAT}[\s,!.?]*", "", text, flags=re.I).strip()
+    if len(stripped.split()) <= 2 or CASUAL_BANTER_PAT.search(stripped):
+        return True
+    if db_rows == 0 and not re.search(r"\b(quest|boss|dungeon|raid|talent|spell|level|trainer|vendor|drop|craft|recipe|herb|mine|fish|skin|leather|cloth|alliance|horde|classic|turtle|forever)\b", stripped, re.I):
+        return True
+    return False
+
+
+def call_local_sassy_banter(question: str, timeout: float = 9.0) -> tuple[str | None, int]:
+    """Handle random banter/chatter on warm local Gemma 4 E2B (:11434) with dry, sassy British butler wit."""
+    t0 = time.perf_counter()
+    prompt = (
+        "You are Alfred, a sharp-tongued, sarcastic British butler (like Alfred Pennyworth mixed with Jarvis) stuck babysitting a chaotic World of Warcraft group in Discord voice.\n"
+        "A player just made a casual or random remark to you. Give a witty, deadpan 1-sentence comeback (under 25 words) that lightly roasts their gaming habits or informal manners.\n"
+        "Rules: Never output coordinates. Plain spoken text only.\n\n"
+        f"PLAYER REMARK: <voice_transcript>{question}</voice_transcript>\n"
+        "WITTY BUTLER COMEBACK:"
+    )
+    payload = {
+        "model": LOCAL_FAST_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": False,
+        "think": False,
+        "keep_alive": "2h",
+        "options": {"num_predict": 70, "temperature": 0.45},
+    }
+    try:
+        req = urllib.request.Request(OLLAMA_CHAT_URL, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            ans = json.loads(r.read().decode("utf-8")).get("message", {}).get("content", "").strip().strip('"')
+        return (ans if ans else None), round((time.perf_counter() - t0) * 1000)
+    except Exception:
+        return None, round((time.perf_counter() - t0) * 1000)
+
+
 def is_simple_wow_lookup(text: str, ctx: str, db_rows: int) -> bool:
     """Route to local Gemma 4 E2B only when ATLAS 3-Signal Difficulty D(x) < 0.28 (high confidence, low complexity)."""
     return estimate_difficulty(text, ctx, db_rows) < 0.28
@@ -195,7 +238,7 @@ def handle_feature_request(text: str) -> tuple[str, str, int]:
     return spoken, summary, ms
 
 
-def call_local_fast_butler(question: str, ctx: str, timeout: float = 7.5) -> tuple[str | None, int]:
+def call_local_fast_butler(question: str, ctx: str, timeout: float = 9.0) -> tuple[str | None, int]:
     """Call warm Gemma 4 E2B on Sheldon RTX 2080 (:11434) with Verify-Then-Escalate guard."""
     t0 = time.perf_counter()
     is_lore_q = bool(re.search(r"\b(lore|history|story|who\s+is|tell\s+(?:me|us)\s+(?:a\s+little\s+bit\s+)?about)\b", question, re.I))
@@ -205,7 +248,7 @@ def call_local_fast_butler(question: str, ctx: str, timeout: float = 7.5) -> tup
         filtered = [r[:340] for r in raw_rows]
     facts = "\n".join(filtered[:6])  # top 6 compact rows (<280 tokens -> ~600ms on RTX 2080)
     prompt = (
-        "You are Alfred, a dry, concise British gentleman's gentleman helping a World of Warcraft Classic party in Discord voice.\n"
+        "You are Alfred, a dry, witty, slightly sassy British gentleman's gentleman helping a World of Warcraft Classic party in Discord voice (feel free to add a brief aristocratic jab while keeping facts exact).\n"
         "Answer the player's question in 1 or 2 short spoken sentences (maximum 35 words) using ONLY the verified facts below.\n"
         "Rules: Address them as 'sir' once if natural. Never read quest ID numbers (#123), but ALWAYS include exact coordinates (e.g. 55.6, 59.8) when answering where an NPC, object, or turn-in is located. No markdown or bullet points. "
         "If the facts below do not directly answer the question, output exactly: ESCALATE\n\n"
@@ -264,7 +307,7 @@ def call_gemini_butler(question: str, ctx: str, timeout: float = 8.0) -> tuple[s
     if not key:
         return None, 0
     prompt = (
-        "You are Alfred, a dry, concise British gentleman's gentleman helping a World of Warcraft Classic (1.12 / Forever WoW) party in Discord voice.\n"
+        "You are Alfred, a dry, witty, slightly sassy British gentleman's gentleman helping a World of Warcraft Classic (1.12 / Forever WoW) party in Discord voice (feel free to add a brief aristocratic jab while keeping facts exact).\n"
         "Answer the player's question in 1 to 3 short spoken sentences (maximum 50 words).\n"
         "Rules: Address them as 'sir' once if natural. Never read quest ID numbers (#123). Include exact coordinates (e.g. 56.3, 92.4) ONLY for in-game NPCs, objects, or towns from the verified facts (NEVER invent coordinates for websites, addons, or out-of-game topics). When a Landmark or [OUTSIDE ...] tag shows an NPC is outside a town, clearly state the compass direction and road from that town rather than saying they are inside the town. No markdown or bullet points.\n"
         "Rely on the VERIFIED WOW FACTS below when present, combined with accurate Vanilla WoW 1.12 geography and mechanics (e.g. Teldrassil -> Darnassus -> Rut'theran Village -> Hippogryph to Auberdine in Darkshore; never invent quest names).\n\n"
@@ -412,7 +455,14 @@ def main():
     local_ms = None
     fast_reply = None
     if woke and not OPENCLAW_MINIMAX_QUERY.search(text):
-        if is_simple_wow_lookup(text, ctx, db_rows) and AB_MODE != "cloud":
+        if is_casual_or_random(text, ctx, db_rows):
+            fast_reply, local_ms = call_local_sassy_banter(text)
+            if fast_reply:
+                arm = "LOCAL_BANTER_GEMMA4"
+            else:
+                fast_reply, local_ms = call_gemini_butler(text, ctx)
+                arm = "BANTER_FALLBACK_GEMINI"
+        elif is_simple_wow_lookup(text, ctx, db_rows) and AB_MODE != "cloud":
             use_local = (AB_MODE == "local") or (ab_idx % 2 == 0)
             if use_local:
                 fast_reply, local_ms = call_local_fast_butler(text, ctx)

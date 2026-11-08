@@ -51,46 +51,43 @@ def run_in_process(text: str, output: str, voice: str, speed: float):
 
 
 def extract_waypoints(question: str, raw_reply: str) -> list[tuple[str, str]]:
-    """Extract (label, '/way X, Y') pairs from both the raw LLM reply and matched wow_db rows."""
+    """Extract (label, '/way X, Y') pairs ONLY for coordinates actually spoken in raw_reply (using wow_db only for clean labels)."""
     waypoints: list[tuple[str, str]] = []
     seen_coords: set[str] = set()
+    coord_labels: dict[str, str] = {}
 
-    # 1. Check raw_reply for spoken coordinates like "40.6, 39.6" or "40 point 6, 39 point 6"
-    norm_reply = re.sub(r"(\d{1,2})\s+point\s+(\d)", r"\1.\2", raw_reply, flags=re.I)
-    for m in re.finditer(r"(?<!\d)(\d{1,2}\.\d)\s*,\s*(\d{1,2}\.\d)(?!\d)", norm_reply):
-        x, y = m.group(1), m.group(2)
-        key = f"{x}, {y}"
-        if key not in seen_coords:
-            seen_coords.add(key)
-            prefix = norm_reply[max(0, m.start() - 60):m.start()].strip(" ,(-\u2014:")
-            label = prefix.split(".")[-1].strip() or "Spoken Waypoint"
-            waypoints.append((label[-50:], f"/way {x}, {y}"))
-
-    # 2. Also pull exact coordinates from wow_db for the question so even short Arm-A voice replies get copyable /way blocks
     if question:
         try:
             sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
             import wow_db
             ctx = wow_db.auto_context(wow_db.normalize_stt(question))
             for line in ctx.splitlines()[1:]:
-                if line.startswith("- Lore ("):
+                if line.startswith("- Lore (") or line.startswith("- Landmark ("):
                     continue
-                head = line.split("|")[0].replace("- ", "").strip()
-                head = re.sub(r"\s*\(#\d+\)", "", head)
+                head = re.sub(r"\s*\(#\d+\)", "", line.split("|")[0].replace("- ", "").strip())
                 for cm in re.finditer(r"([A-Za-z'\- ]+?)\s*\(([A-Za-z'\- ]+?)\s*\((\d{1,2}\.\d),\s*(\d{1,2}\.\d)\)\)", line):
                     entity, zone, x, y = cm.group(1).strip(), cm.group(2).strip(), cm.group(3), cm.group(4)
-                    key = f"{x}, {y}"
-                    if key not in seen_coords:
-                        seen_coords.add(key)
-                        waypoints.append((f"{head} \u2014 {entity} ({zone})", f"/way {x}, {y}"))
+                    coord_labels.setdefault(f"{x}, {y}", f"{head} \u2014 {entity} ({zone})")
                 for cm in re.finditer(r"\|\s*([A-Za-z'\- ]+?)\s*\((\d{1,2}\.\d),\s*(\d{1,2}\.\d)\)", line):
                     zone, x, y = cm.group(1).strip(), cm.group(2), cm.group(3)
-                    key = f"{x}, {y}"
-                    if key not in seen_coords:
-                        seen_coords.add(key)
-                        waypoints.append((f"{head} ({zone})", f"/way {x}, {y}"))
+                    coord_labels.setdefault(f"{x}, {y}", f"{head} ({zone})")
         except Exception:
             pass
+
+    if not raw_reply:
+        return []
+    norm_reply = re.sub(r"(\d{1,2})\s+point\s+(\d)", r"\1.\2", raw_reply, flags=re.I)
+    for m in re.finditer(r"(?<!\d)(\d{1,2}\.\d)\s*,\s*(\d{1,2}\.\d)(?!\d)", norm_reply):
+        x, y = m.group(1), m.group(2)
+        key = f"{x}, {y}"
+        if key not in seen_coords and key != "0.0, 0.0":
+            seen_coords.add(key)
+            if key in coord_labels:
+                label = coord_labels[key]
+            else:
+                prefix = norm_reply[max(0, m.start() - 60):m.start()].strip(" ,(-\u2014:")
+                label = (prefix.split(".")[-1].strip() or "Spoken Waypoint")[-50:]
+            waypoints.append((label, f"/way {x}, {y}"))
 
     return waypoints[:5]
 

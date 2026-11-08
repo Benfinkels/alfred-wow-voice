@@ -202,7 +202,7 @@ def call_local_sassy_banter(question: str, timeout: float = 9.0) -> tuple[str | 
     try:
         req = urllib.request.Request(OLLAMA_CHAT_URL, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            ans = re.sub(r"^.*?SPOKEN (?:REPLY|ANSWER):\s*", "", json.loads(r.read().decode("utf-8")).get("message", {}).get("content", ""), flags=re.S).strip().strip('"')
+            _d = json.loads(r.read().decode("utf-8")); _LAST_TOKENS.update({"in_tok": _d.get("prompt_eval_count", 0), "out_tok": _d.get("eval_count", 0)}); ans = re.sub(r"^.*?SPOKEN (?:REPLY|ANSWER):\s*", "", _d.get("message", {}).get("content", ""), flags=re.S).strip().strip('"')
         return (ans if ans else None), round((time.perf_counter() - t0) * 1000)
     except Exception:
         return None, round((time.perf_counter() - t0) * 1000)
@@ -240,7 +240,7 @@ def handle_feature_request(text: str) -> tuple[str, str, int]:
             headers={"Content-Type": "application/json"},
         )
         with urllib.request.urlopen(req, timeout=2.5) as r:
-            ans = re.sub(r"^.*?SPOKEN (?:REPLY|ANSWER):\s*", "", json.loads(r.read().decode("utf-8")).get("message", {}).get("content", ""), flags=re.S).strip().strip('"')
+            _d = json.loads(r.read().decode("utf-8")); _LAST_TOKENS.update({"in_tok": _d.get("prompt_eval_count", 0), "out_tok": _d.get("eval_count", 0)}); ans = re.sub(r"^.*?SPOKEN (?:REPLY|ANSWER):\s*", "", _d.get("message", {}).get("content", ""), flags=re.S).strip().strip('"')
             if ans:
                 summary = ans.splitlines()[0].strip()
     except Exception:
@@ -299,7 +299,7 @@ def call_local_fast_butler(question: str, ctx: str, timeout: float = 9.0) -> tup
             headers={"Content-Type": "application/json"},
         )
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            data = json.loads(r.read().decode("utf-8"))
+            data = json.loads(r.read().decode("utf-8")); _LAST_TOKENS.update({"in_tok": data.get("prompt_eval_count", 0), "out_tok": data.get("eval_count", 0)})
         ans = data.get("message", {}).get("content", "").strip().strip('"')
         ms = round((time.perf_counter() - t0) * 1000)
         if not ans or "ESCALATE" in ans.upper() or UNCERTAIN_REPLY.search(ans) or len(ans) > 420:
@@ -312,6 +312,7 @@ def call_local_fast_butler(question: str, ctx: str, timeout: float = 9.0) -> tup
 
 
 
+_LAST_TOKENS = {}
 GEMINI_MODEL = os.environ.get("VOICE_GEMINI_MODEL", "gemini-3.5-flash")
 OPENCLAW_MINIMAX_QUERY = re.compile(r"\b(link\s+to|send\s+(?:a\s+|me\s+|us\s+|)?link|give\s+\w+\s+a\s+link|install\s+the\s+.*add-?on|curseforge|search\s+the\s+web|look\s+up\s+online)\b", re.I)
 
@@ -361,6 +362,7 @@ def call_gemini_butler(question: str, ctx: str, timeout: float = 8.0) -> tuple[s
         req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=timeout) as r:
             data = json.loads(r.read().decode("utf-8"))
+        _u = data.get("usageMetadata", {}); _LAST_TOKENS.update({"in_tok": _u.get("promptTokenCount", 0), "out_tok": _u.get("candidatesTokenCount", 0)})
         parts = data["candidates"][0]["content"]["parts"]
         ans = "".join(p.get("text", "") for p in parts if not p.get("thought")).strip().strip('"')
         ms = round((time.perf_counter() - t0) * 1000)
@@ -521,6 +523,8 @@ def main():
             rec = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "kind": "stt", "text": text, "woke": woke, "ms": res.get("ms"), "db_rows": db_rows, "arm": arm}
             if local_ms is not None:
                 rec["local_ms"] = local_ms
+            if _LAST_TOKENS:
+                rec.update(_LAST_TOKENS)
             f.write(json.dumps(rec) + "\n")
     except OSError:
         pass

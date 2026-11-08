@@ -68,7 +68,10 @@ if woke_only:
     for r, arm, tts in turns[-n:]:
         label = ARM_LABELS.get(arm, arm)
         llm_ms = f"{r['local_ms']}ms" if r.get("local_ms") else "gateway"
-        print(f"[{r['ts']}]  {label} | STT: {r.get('ms')}ms | LLM: {llm_ms} | DB: {r.get('db_rows', 0)} rows")
+        in_t = r.get("in_tok") or (145 if "BANTER" in arm else (880 if "GEMINI" in arm else 18500))
+        out_t = r.get("out_tok") or max(1, round(len(tts) / 3.8))
+        cost_str = f"${(in_t * 0.30 + out_t * 2.50) / 1e6:.5f}" if "GEMINI" in arm else "$0.00000"
+        print(f"[{r['ts']}]  {label} | STT: {r.get('ms')}ms | LLM: {llm_ms} | Tokens: {in_t} in / {out_t} out ({cost_str}) | DB: {r.get('db_rows', 0)} rows")
         print(f"  Q: {r.get('text', '')}")
         print(f"  A: {tts or '(no spoken reply)'}\n")
     sys.exit(0)

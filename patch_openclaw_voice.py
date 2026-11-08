@@ -28,6 +28,20 @@ CTRL_SERVER_SNIPPET = """var DiscordVoiceManager = class {
 \t\t\t\t\t\t\tsock.end(JSON.stringify(res ?? { ok: false }) + "\\n");
 \t\t\t\t\t\t\treturn;
 \t\t\t\t\t\t}
+\t\t\t\t\t\tif (cmd === "ack") {
+\t\t\t\t\t\t\ttry {
+\t\t\t\t\t\t\t\tconst ackDir = (process.env.HOME || "/tmp") + "/.openclaw/voice-acks";
+\t\t\t\t\t\t\t\tconst acks = (await import("node:fs")).readdirSync(ackDir).filter((f) => f.endsWith(".wav"));
+\t\t\t\t\t\t\t\tconst recent = (globalThis.__recentAcks ??= []); const pool = acks.filter((a) => !recent.includes(a));
+\t\t\t\t\t\t\t\tconst chosen = (pool.length ? pool : acks)[Math.floor(Math.random() * (pool.length || acks.length))];
+\t\t\t\t\t\t\t\trecent.push(chosen); if (recent.length > 6) recent.shift();
+\t\t\t\t\t\t\t\tfor (const e of globalThis.__alfredVoiceManager?.sessions?.values() ?? []) {
+\t\t\t\t\t\t\t\t\tif (e?.audio && e.sessionLifecycle?.status !== "stopped") e.playbackQueue = (e.playbackQueue ?? Promise.resolve()).then(() => e.audio.play(ackDir + "/" + chosen)).catch(() => {});
+\t\t\t\t\t\t\t\t}
+\t\t\t\t\t\t\t\tsock.end(JSON.stringify({ ok: true, ack: chosen }) + "\\n");
+\t\t\t\t\t\t\t} catch (e) { sock.end(JSON.stringify({ ok: false, error: String(e) }) + "\\n"); }
+\t\t\t\t\t\t\treturn;
+\t\t\t\t\t\t}
 \t\t\t\t\t\tlet playing = false;
 \t\t\t\t\t\tfor (const t of globalThis.__alfredTransports ?? []) {
 \t\t\t\t\t\t\tif (!t.terminal && (t.playerStatus === "playing" || t.files.size > 0)) {

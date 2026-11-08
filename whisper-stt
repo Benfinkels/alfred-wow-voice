@@ -3,7 +3,7 @@
 --wake: print nothing unless the transcript addresses Alfred (keeps raid chatter away from the LLM).
 Includes JEV-style Value/Complexity Router + Live 50/50 A/B Split (Arm A: Local Gemma 4 E2B vs Arm B: Cloud MiniMax-M2.7).
 shortcut: tools.media.audio is global, so --wake also filters Discord DM voice notes; scope it if other audio channels get added."""
-import json, os, re, socket, subprocess, sys, time, urllib.request
+import json, os, re, socket, subprocess, sys, threading, time, urllib.request
 
 WAKE_NAME = os.environ.get("VOICE_WAKE_NAME", "Alfred")
 WAKE_PAT = os.environ.get(
@@ -500,6 +500,10 @@ def main():
     local_ms = None
     fast_reply = None
     if woke and not OPENCLAW_MINIMAX_QUERY.search(text):
+        # Queue a butler ack ("one moment, sir") only if the answer takes longer than 2s.
+        ack_timer = threading.Timer(2.0, voice_ctrl, args=("ack",))
+        ack_timer.daemon = True
+        ack_timer.start()
         if is_casual_or_random(text, ctx, db_rows):
             fast_reply, local_ms = call_local_sassy_banter(text)
             if fast_reply:
@@ -526,6 +530,7 @@ def main():
             if grounded and not fast_reply:
                 fast_reply, local_ms = call_gemini_butler(text, ctx)
             arm = ("RESEARCH_GEMINI" if grounded else "COMPLEX_GEMINI") if fast_reply else "COMPLEX_CLOUD"
+        ack_timer.cancel()
 
     try:
         os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)

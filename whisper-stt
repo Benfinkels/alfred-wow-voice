@@ -303,7 +303,7 @@ def call_local_fast_butler(question: str, ctx: str, timeout: float = 9.0) -> tup
 
 
 
-GEMINI_MODEL = os.environ.get("VOICE_GEMINI_MODEL", "gemini-3.5-flash")
+GEMINI_MODEL = os.environ.get("VOICE_GEMINI_MODEL", "gemini-3.5-flash-lite")
 OPENCLAW_MINIMAX_QUERY = re.compile(r"\b(link\s+to|send\s+(?:a\s+|me\s+|us\s+|)?link|give\s+\w+\s+a\s+link|install\s+the\s+.*add-?on|curseforge|search\s+the\s+web|look\s+up\s+online)\b", re.I)
 
 
@@ -337,7 +337,7 @@ def call_gemini_butler(question: str, ctx: str, timeout: float = 8.0) -> tuple[s
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={key}"
     body = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.2, "thinkingConfig": {"thinkingBudget": 0}},
+        "generationConfig": {"temperature": 0.2} if "lite" in GEMINI_MODEL else {"temperature": 0.2, "thinkingConfig": {"thinkingBudget": 0}},
     }
     try:
         req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers={"Content-Type": "application/json"})

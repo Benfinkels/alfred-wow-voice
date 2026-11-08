@@ -351,7 +351,13 @@ STT_ALIASES = {
     r"\bsentinel\s+tower\b": "Sentinel Hill",
     r"\b(?:north\s+thane(?:\s+iron\s*forge)?|(?:the\s+)?halls?\s+of\s+th(?:ane|ain)s?)\b": "The Hall of Thanes",
     r"\bruins\s+of\s+lord[ae]r[oa]n\b": "Ruins of Lordaeron",
+    r"\bexcavation\s+site(?:\s*:?\s*wetlands)?\b": "Excavation Site: Wetlands",
     r"\bkrol'?dok(?:\s+stronghold)?\b": "Krol'dok Stronghold",
+    r"\bshaper'?s?\s+terrace\b": "Shaper's Terrace",
+    r"\bshen'?dral[ao]s\b": "Shen'dralas",
+    r"\bzephr[au]s\s+is(?:le|land)\b": "Zephras Isle",
+    r"\bun\s*goro(?:\s+crater)?\b": "Un'Goro Crater",
+    r"\bzul\s*farr?ak\b": "Zul'Farrak",
     r"\briver\s+glades\b": "Riverglades",
     r"\bfar\s*holde?\s+keep\b": "Farholde Keep",
     r"\b(?:rumi|rummy)\s+of\s+(?:nomragon|no\s+morrigan|gnomeregan)\b": "Gnomeregan",
@@ -623,12 +629,20 @@ def self_check():
     # 2. Verify Westfall level 10 zone lookup returns both NPC and Item-Drop quests accurately
     wf10 = auto_context("Hey Alfred, I'm in Westfall at level 10, what quests can I get?")
     assert "Poor Old Blanchy" in wf10 and "The Forgotten Heirloom" in wf10 and "Furlbrow's Deed" in wf10, f"Failed wf10 check: {wf10}"
-    # 3. Verify custom Forever zone (Riverglades) works
+    # 3. Verify custom Forever zones & dungeons (Riverglades, Hall of Thanes, Excavation Site, Feralas)
     rg = auto_context("Hey Alfred, what quests are in Riverglades?")
     assert "Riverglades" in rg, f"Failed Riverglades check: {rg}"
-    # 4. Verify offline lore corpus (Murloc & Queen Azshara) works
+    hot = auto_context("What about Halls of Thain?")
+    assert "The Hall of Thanes" in hot and "Durgen Dirgehammer" in hot, f"Failed Hall of Thanes check: {hot}"
+    esw = auto_context("What are the bosses and quests in Excavation Site Wetlands?")
+    assert "Saltspine" in esw and "Zone: Excavation Site: Wetlands" in esw, f"Failed Excavation Site check: {esw}"
+    fer = auto_context("What quests are in Feralas at level 42?")
+    assert "Zone: Feralas |" in fer, f"Failed Feralas check: {fer}"
+    # 4. Verify offline lore corpus & Class Quest Spells
     ml = auto_context("Hey Alfred, describe the history of the Murlocks")
     assert "Lore (Murloc):" in ml and "gorlocs" in ml.lower(), f"Failed Murloc lore check: {ml}"
+    dr = auto_context("How do I get Cat Form as a Druid in WoW Forever?")
+    assert "Class Quest Spells: Druid" in dr and "#98397" in dr, f"Failed Druid Class Quest Spells check: {dr}"
     conn.close()
     print("SELF-CHECK PASSED!")
     print("\n--- Sample Auto-Context Output for 'Westfall at level 10' ---")

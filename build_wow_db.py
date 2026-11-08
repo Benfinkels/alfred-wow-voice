@@ -65,8 +65,13 @@ CURATED_MECHANICS_LORE = [
     ),
     (
         "Alliance Travel Routes, Boats, Tram and Flight Paths",
-        "boat zeppelin tram travel route teldrassil darkshore auberdine menethil stormwind ironforge westfall",
-        "WoW Classic Alliance Travel Connections: (1) Teldrassil is an island tree; walk through Darnassus (36, 50) into the pink portal to Rut'theran Village (56.3, 92.4), then take the free Hippogryph (The Bounty of Teldrassil #6341 -> Flight to Auberdine #6342) or boat to Auberdine in Darkshore (36.8, 44.3). (2) From Auberdine (Darkshore) south dock (32.4, 43.8), take the boat to Menethil Harbor in Wetlands (4.6, 57.1). (3) From Menethil Harbor, run east through Wetlands and south through Loch Modan to Dun Morogh / Ironforge. (4) Take the Deeprun Tram in Ironforge (Tinker Town 77, 51) directly to Stormwind City (Dwarven District 63, 8), which connects to Elwynn Forest, Westfall (Sentinel Hill flight path at 56.5, 52.6), and Redridge Mountains (Lakeshire flight path at 30.6, 59.4). Note: Stormwind has NO harbor or boat in Classic 1.12.",
+        "boat zeppelin airship tram travel route teldrassil darkshore auberdine menethil southshore stormwind harbor ironforge westfall feathermoon feralas tanaris riverglades zephras isle",
+        "WoW Forever Travel Connections (Classic + New Forever Boats & Airships): (1) Teldrassil -> Darnassus (36, 50) pink portal -> Rut'theran Village (56.3, 92.4) boat/hippogryph (#6341/#6342) to Auberdine in Darkshore (36.8, 44.3). (2) NEW in WoW Forever: Stormwind Harbor has a direct boat between Stormwind City and Auberdine (Darkshore)! (3) NEW in WoW Forever: A triangle boat connects Menethil Harbor (Wetlands) <-> Southshore (Hillsbrad) <-> Auberdine (Darkshore), plus the classic Menethil <-> Theramore boat. (4) Deeprun Tram in Ironforge (Tinker Town 77, 51) runs directly to Stormwind City (Dwarven District 63, 8). (5) NEW in WoW Forever: Steamwheedle Port (Tanaris) <-> Powderfuse Port (Riverglades) boat, Feathermoon Stronghold <-> Feralas mainland ferry, and Airships connecting Zephras Isle <-> Alterac Mountains (Alliance) and Zephras Isle <-> Mulgore (Horde).",
+    ),
+    (
+        "Camping Secondary Skill and Rested XP Guide (WoW Forever)",
+        "camping skill tent campfire rested xp the great outdoors camping 101",
+        "Camping is a custom WoW Forever secondary survival & crafting system unlocked at Level 4 via 'The Great Outdoors' (#95998 in Elwynn Forest / Goldshire from Sam, #96003 in Dun Morogh, #96008 in Teldrassil, #96013 in Durotar, #96018 in Mulgore, #96023 in Tirisfal Glades, #96028 on Zephras Isle). It pairs with primary professions via 'Camping 101' quests (Alchemy #96045, Blacksmithing #96044, Leatherworking #96031, Tailoring, Engineering, Enchanting, Cooking, First Aid) to craft campfires, tents, and field supplies.",
     ),
     (
         "Teldrassil to Darkshore Leveling and Quest Skip Guide",
@@ -478,13 +483,27 @@ def load_zone_and_sort_names():
             if m:
                 sub_id = int(m.group(1))
                 parent_id = int(m.group(2))
-                sub_name = m.group(3).strip()
-                parent_name = m.group(4).strip() if m.group(4) else None
+                sub_name = re.sub(r"\s*\((?:Forever DBC|fake ID[^)]*|cave)\)$", "", m.group(3).strip())
+                parent_name = re.sub(r"\s*\((?:Forever DBC|fake ID[^)]*|cave)\)$", "", m.group(4).strip()) if m.group(4) else None
                 sub_to_parent[sub_id] = parent_id
                 if parent_name and not parent_name.endswith("UNUSED"):
                     zones[parent_id] = parent_name
                 if sub_name and not sub_name.endswith("UNUSED"):
                     zones[sub_id] = sub_name
+
+    # Ensure custom Forever parent zones have clean canonical names
+    zones.update({
+        616: "Mount Hyjal",
+        16544: "City of Dalaran",
+        16591: "Riverglades",
+        16593: "Zephras Isle",
+        16606: "Darkspear Islands",
+        16611: "Ruins of Lordaeron",
+        16651: "Shen'dralas",
+        16653: "Battle for Gilneas",
+        16732: "Excavation Site: Wetlands",
+        16919: "The Hall of Thanes",
+    })
 
     def resolve_zone(zid: int) -> str:
         if not zid:
@@ -936,14 +955,6 @@ def build_sqlite():
                 sb_parts.append(item_source_str[siid])
         started_by = "; ".join(sb_parts) or "Auto/Chain"
 
-        # If zone was negative sortKey or Unknown, enrich with starter NPC's zone if possible
-        if (z_or_s <= 0 or zone.startswith("Zone #")) and sb_npcs:
-            first_nid = sb_npcs[0]
-            if first_nid in npcs:
-                nz, _ = format_spawns(npcs[first_nid].get(7), npcs[first_nid].get(9), resolve_zone)
-                if nz and nz != "Unknown" and nz != zone:
-                    zone = f"{zone} ({nz})" if z_or_s < 0 else nz
-
         # finishedBy = [npcIds, objIds]
         fb = d.get(3)
         fb_npcs = lua_list(lua_idx(fb, 1))
@@ -954,6 +965,25 @@ def build_sqlite():
         for oid in fb_objs[:3]:
             fb_parts.append(obj_loc_str.get(oid, f"Object #{oid}"))
         finished_by = "; ".join(fb_parts) or "None"
+
+        # If zone was negative sortKey or Unknown, enrich with starter/turn-in NPC or Object zone if possible
+        if z_or_s <= 0 or zone == "Unknown" or zone.startswith("Zone #"):
+            inferred_z = None
+            for nid in (sb_npcs + fb_npcs):
+                if nid in npcs:
+                    nz, _ = format_spawns(npcs[nid].get(7), npcs[nid].get(9), resolve_zone)
+                    if nz and nz != "Unknown" and not nz.startswith("Zone #"):
+                        inferred_z = nz
+                        break
+            if not inferred_z:
+                for oid in (sb_objs + fb_objs):
+                    if oid in objects:
+                        oz, _ = format_spawns(objects[oid].get(4), objects[oid].get(5), resolve_zone)
+                        if oz and oz != "Unknown" and not oz.startswith("Zone #"):
+                            inferred_z = oz
+                            break
+            if inferred_z and inferred_z != zone:
+                zone = f"{zone} ({inferred_z})" if z_or_s < 0 else inferred_z
 
         # Objectives text + structured targets (creatures idx 1, objects idx 2, items idx 3, triggerEnd field 9, extraObjectives field 29)
         obj_texts = lua_list(d.get(8))
@@ -995,6 +1025,12 @@ def build_sqlite():
 
         if target_parts:
             obj_str = (obj_str + " [Targets: " + "; ".join(target_parts) + "]").strip()
+
+        if zone == "Unknown" and obj_str:
+            for d_cand in ("The Hall of Thanes", "Hall of Thanes", "The Drowned City", "Drowned City", "Stranglethorn Vale", "Badlands", "Shadowfang Keep", "Desolace"):
+                if d_cand.lower() in obj_str.lower():
+                    zone = "The Hall of Thanes" if "Hall of Thanes" in d_cand else ("The Drowned City" if "Drowned City" in d_cand else d_cand)
+                    break
 
         # Prereqs (field 12 preQuestGroup + field 13 preQuestSingle)
         pre_ids = lua_list(d.get(12)) + lua_list(d.get(13))
@@ -1045,11 +1081,15 @@ def build_sqlite():
     cur.executemany("INSERT INTO quests VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", quest_rows)
     cur.executemany("INSERT INTO wow_fts VALUES (?,?,?,?,?)", fts_rows)
 
-    # Restore existing lore + upsert addon lore & curated mechanics guides
+    # Restore existing lore + upsert addon lore, OpenMap/QuestieDB dungeon & class guides, & curated mechanics guides
+    existing_lore_map = {t: (a, s) for t, a, s in existing_lore}
+    openmap_class_lore = build_openmap_and_class_lore(quest_rows, quests, resolve_zone, existing_lore_map)
     if existing_lore:
         cur.executemany("INSERT OR REPLACE INTO lore (title, aliases, summary) VALUES (?,?,?)", existing_lore)
     if extra_lore:
         cur.executemany("INSERT OR REPLACE INTO lore (title, aliases, summary) VALUES (?,?,?)", extra_lore)
+    if openmap_class_lore:
+        cur.executemany("INSERT OR REPLACE INTO lore (title, aliases, summary) VALUES (?,?,?)", openmap_class_lore)
     cur.executemany("INSERT OR REPLACE INTO lore (title, aliases, summary) VALUES (?,?,?)", CURATED_MECHANICS_LORE)
     cur.execute("INSERT INTO lore_fts(lore_fts) VALUES('rebuild');")
 
@@ -1063,6 +1103,217 @@ def build_sqlite():
     print(f"Built {OUT_DB} ({os.path.getsize(OUT_DB) / (1024*1024):.2f} MB) with {len(quest_rows):,} quests, {len(npc_rows):,} NPCs, {len(item_rows):,} items, {lore_cnt:,} lore/mechanics guides.")
 
 
+def build_openmap_and_class_lore(quest_rows, quests, resolve_zone, existing_lore_map) -> list[tuple[str, str, str]]:
+    """Auto-compile dungeon guides, boss rosters, entrance coordinates, zone level ranges, and class quest spells from OpenMap, QuestieDB, and WhatsTraining."""
+    out = []
+    places_lua = os.path.join(ADDON_ROOT, r"OpenMap\Data\Places.lua")
+    levels_lua = os.path.join(ADDON_ROOT, r"OpenMap\Data\Levels.lua")
+    dungeons_lua = os.path.join(ADDON_DIR, r"support\Forever\Zones\dungeons.lua")
+    quest_spells_lua = os.path.join(ADDON_ROOT, r"WhatsTraining\Classes\Camelot\QuestSpells.lua")
+    zones_en_lua = os.path.join(ADDON_ROOT, r"Spoken_Places\Data\enUS\Zones.lua")
+
+    uimap_to_zone = {}
+    if os.path.exists(zones_en_lua):
+        with open(zones_en_lua, "r", encoding="utf-8") as f:
+            for m in re.finditer(r"\[(\d+)\]\s*=\s*\{\s*name\s*=\s*\"([^\"]+)\"", f.read()):
+                uimap_to_zone[int(m.group(1))] = m.group(2)
+
+    # 1. Parse QuestieDB Forever dungeons.lua (before WotLK/Cata blocks) for exact entrance zones & coordinates
+    d_entrances = {}
+    if os.path.exists(dungeons_lua):
+        with open(dungeons_lua, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("if Expansions.Current"):
+                    break
+                m = re.match(r'^\s*\[(\d+)\]\s*=\s*\{"([^"]+)",\s*(?:nil|\{[^}]*\}),\s*(\d+),\s*\{\{(\d+),\s*([0-9.]+),\s*([0-9.]+)\}', line)
+                if m:
+                    dname, p_zid, c_zid, cx, cy = m.group(2), int(m.group(3)), int(m.group(4)), float(m.group(5)), float(m.group(6))
+                    ezone = resolve_zone(c_zid) if c_zid else resolve_zone(p_zid)
+                    if dname not in d_entrances:
+                        d_entrances[dname] = f"{ezone} ({cx:.1f}, {cy:.1f})"
+
+    # 2. Parse OpenMap Places.lua (instances, unplaced, bosses)
+    bosses_by_map = {}
+    instances_info = []
+    if os.path.exists(places_lua):
+        with open(places_lua, "r", encoding="utf-8") as f:
+            ptxt = f.read()
+        m_boss = re.search(r"bosses\s*=\s*\{(.*?)\n\t\},", ptxt, re.DOTALL)
+        if m_boss:
+            for mb in re.finditer(r"\[(\d+)\]\s*=\s*\{([^}]+)\}", m_boss.group(1)):
+                bosses_by_map[int(mb.group(1))] = re.findall(r'"([^"]+)"', mb.group(2))
+
+        m_inst = re.search(r"instances\s*=\s*\{(.*?)\n\t\},", ptxt, re.DOTALL)
+        if m_inst:
+            for line in m_inst.group(1).splitlines():
+                m_map = re.search(r"map\s*=\s*(\d+)", line)
+                m_xy = re.match(r"^\s*\{\s*nil,\s*([0-9.]+),\s*([0-9.]+),", line)
+                loc_override = None
+                if m_map and m_xy:
+                    uz = uimap_to_zone.get(int(m_map.group(1)), f"Map #{m_map.group(1)}")
+                    loc_override = f"{uz} ({float(m_xy.group(1))*100:.1f}, {float(m_xy.group(2))*100:.1f})"
+                for mi in re.finditer(r"\{\s*(\d+),\s*\"([^\"]+)\",\s*(true|false),\s*(nil|\d+),\s*(nil|\d+)\s*\}", line):
+                    mid, iname, is_raid_s, min_s, max_s = int(mi.group(1)), mi.group(2), mi.group(3) == "true", mi.group(4), mi.group(5)
+                    min_l = int(min_s) if min_s != "nil" else 60
+                    max_l = int(max_s) if max_s != "nil" else 60
+                    instances_info.append((mid, iname, is_raid_s, min_l, max_l, loc_override))
+
+        m_unp = re.search(r"unplaced\s*=\s*\{(.*?)\n\t\},", ptxt, re.DOTALL)
+        if m_unp:
+            for mi in re.finditer(r"\{\s*(\d+),\s*\"([^\"]+)\",\s*(true|false),\s*(\d+),\s*(\d+)\s*\}", m_unp.group(1)):
+                instances_info.append((int(mi.group(1)), mi.group(2), mi.group(3) == "true", int(mi.group(4)), int(mi.group(5)), None))
+
+    # Fallback locations for unplaced custom Forever dungeons
+    custom_fallbacks = {
+        "Krol'dok Stronghold": "Riverglades (Krol'dok Stronghold)",
+        "Alcaz Prison": "Dustwallow Marsh (Alcaz Island)",
+        "Blackmaw Hold": "Azshara",
+        "Shaper's Terrace": "Un'Goro Crater",
+    }
+    custom_names = {
+        "The Hall of Thanes", "Ruins of Lordaeron", "Excavation Site: Wetlands",
+        "City of Dalaran", "The Drowned City", "Krol'dok Stronghold",
+        "Alcaz Prison", "Blackmaw Hold", "Shaper's Terrace",
+    }
+
+    # Consolidate multi-wing instances (e.g. Scarlet Monastery, Dire Maul, Blackrock Spire) while keeping wing levels
+    grouped_dungeons = {}
+    for mid, iname, is_raid, min_l, max_l, loc_ov in instances_info:
+        base_name = iname.split(" - ")[0]
+        if base_name in ("Lower Blackrock Spire", "Upper Blackrock Spire"):
+            base_name = "Blackrock Spire"
+        ent = (
+            loc_ov
+            or d_entrances.get(iname)
+            or d_entrances.get(base_name)
+            or d_entrances.get(f"The {base_name}")
+            or d_entrances.get(base_name.replace("Sunken Temple", "The Temple of Atal'Hakkar").replace("Stormwind Stockade", "The Stockade"))
+            or custom_fallbacks.get(base_name, "Azeroth")
+        )
+        if base_name not in grouped_dungeons:
+            grouped_dungeons[base_name] = {
+                "mid": mid,
+                "name": base_name,
+                "is_raid": is_raid,
+                "min_l": min_l,
+                "max_l": max_l,
+                "wings": [iname] if " - " in iname or "Spire" in iname else [],
+                "entrance": ent,
+                "bosses": bosses_by_map.get(mid, []),
+            }
+        else:
+            g = grouped_dungeons[base_name]
+            g["min_l"] = min(g["min_l"], min_l)
+            g["max_l"] = max(g["max_l"], max_l)
+            if (" - " in iname or "Spire" in iname) and iname not in g["wings"]:
+                g["wings"].append(iname)
+
+    # Build unified "WoW Forever Dungeons and Instances by Level" guide + per-dungeon guides
+    five_mans = sorted([g for g in grouped_dungeons.values() if not g["is_raid"]], key=lambda x: (x["min_l"], x["max_l"], x["name"]))
+    raids = sorted([g for g in grouped_dungeons.values() if g["is_raid"]], key=lambda x: (x["min_l"], x["name"]))
+
+    dir_parts = []
+    for g in five_mans:
+        tag = " [NEW Forever Dungeon]" if g["name"] in custom_names else ""
+        dir_parts.append(f"{g['min_l']}-{g['max_l']}: {g['name']}{tag} ({g['entrance']})")
+    raid_parts = [f"{g['name']} ({g['entrance']})" for g in raids]
+    out.append((
+        "WoW Forever Dungeons and Instances by Level",
+        "dungeon dungeons instance instances level range bracket 10 15 20 25 30 35 40 45 50 55 60 hall of thanes thane ruins of lordaeron excavation site wetlands city of dalaran drowned city kroldok stronghold alcaz prison blackmaw hold shapers terrace deadmines wailing caverns shadowfang keep blackfathom deeps stockade gnomeregan razorfen kraul scarlet monastery razorfen downs uldaman zulfarrak maraudon sunken temple blackrock depths scholomance stratholme dire maul",
+        "WoW Forever 5-Player Dungeons by Level (Client 1.60.1 — Classic + 9 Custom Forever Dungeons): "
+        + " | ".join(dir_parts)
+        + (" | Level 60 Raids: " + ", ".join(raid_parts) if raid_parts else ""),
+    ))
+
+    # Build per-dungeon guide rows joining quests and preserving existing wiki lore
+    for g in grouped_dungeons.values():
+        dname = g["name"]
+        q_search_names = {dname.lower(), f"the {dname.lower()}"}
+        if dname == "Stormwind Stockade":
+            q_search_names.add("the stockade")
+        elif dname == "Sunken Temple":
+            q_search_names.add("the temple of atal'hakkar")
+        d_quests = []
+        for qid, qname, qzone, rlvl, qlvl, qfac, _, qstart, _, _, _, _, _ in quest_rows:
+            qz_low = qzone.lower()
+            if any(sn in qz_low for sn in q_search_names):
+                short_start = qstart.split(";")[0]
+                d_quests.append(f"{qname} (#{qid}, Lvl {rlvl}/{qlvl}, {qfac}, Start: {short_start})")
+        boss_s = ", ".join(g["bosses"][:14]) if g["bosses"] else "Custom/Unlisted"
+        quest_s = "; ".join(d_quests[:8]) if d_quests else "See zone quest givers"
+        kind_s = "Raid (Lvl 60)" if g["is_raid"] else f"{'Custom WoW Forever ' if dname in custom_names else ''}5-Player Dungeon (Levels {g['min_l']}-{g['max_l']})"
+        guide_txt = f"[WoW Forever Dungeon Guide] {dname} — {kind_s} | Entrance: {g['entrance']} | Bosses ({len(g['bosses'])}): {boss_s} | Dungeon Quests ({len(d_quests)}): {quest_s}"
+
+        # Preserve existing wiki lore if present under dname or "The " + dname
+        old_alias, old_sum = existing_lore_map.get(dname) or existing_lore_map.get(f"The {dname}") or ("", "")
+        if old_sum and "[WoW Forever Dungeon Guide]" in old_sum:
+            old_sum = old_sum.split("| Lore: ", 1)[1] if "| Lore: " in old_sum else ""
+        if old_sum:
+            guide_txt += f" | Lore: {old_sum[:320]}"
+
+        aliases = f"{dname.lower()} the {dname.lower()} dungeon bosses quests entrance level {old_alias}".strip()
+        if dname == "The Hall of Thanes":
+            aliases += " hall of thanes halls of thane halls of thain north thane ironforge faldrim anvilmar infurnus plunder durgen dirgehammer"
+        elif dname == "Stormwind Stockade":
+            aliases += " the stockade stockades"
+        elif dname == "Sunken Temple":
+            aliases += " temple of atal'hakkar atalhakkar"
+        out.append((dname, aliases, guide_txt))
+
+    # 3. Parse OpenMap Levels.lua for "WoW Forever Zones by Level Guide"
+    if os.path.exists(levels_lua):
+        with open(levels_lua, "r", encoding="utf-8") as f:
+            ltxt = f.read()
+        z_levels = []
+        for ml in re.finditer(r"\[(\d+)\]\s*=\s*\{\s*(\d+),\s*(\d+)\s*\},\s*--\s*([^\n\r(]+)", ltxt):
+            umid, min_z, max_z, z_comm = int(ml.group(1)), int(ml.group(2)), int(ml.group(3)), ml.group(4).strip()
+            z_levels.append((min_z, max_z, uimap_to_zone.get(umid, z_comm)))
+        z_levels.extend([(38, 43, "Shen'dralas [Custom Forever Zone]"), (30, 60, "Darkspear Islands [Custom Forever Zone]")])
+        z_levels.sort()
+        z_str = " | ".join(f"{mn}-{mx}: {zn}" for mn, mx, zn in z_levels)
+        out.append((
+            "WoW Forever Zones by Level Guide",
+            "zones by level leveling guide where to go zone bracket 10 15 20 25 30 35 40 45 50 55 60 riverglades zephras isle shendralas darkspear islands",
+            f"WoW Forever Leveling Zones by Level Range (Eastern Kingdoms, Kalimdor & Custom Forever Zones): {z_str}",
+        ))
+
+    # 4. Parse WhatsTraining Classes/Camelot/QuestSpells.lua for Class Quest Spells
+    race_names = {1: "Human", 2: "Orc", 3: "Dwarf", 4: "Night Elf", 5: "Undead", 6: "Tauren", 7: "Gnome", 8: "Troll", 95: "High Elf", 96: "Goblin"}
+    if os.path.exists(quest_spells_lua):
+        with open(quest_spells_lua, "r", encoding="utf-8") as f:
+            qstxt = f.read()
+        for m_cls in re.finditer(r"^    ([A-Z]+)\s*=\s*\{(.*?)^    \},", qstxt, re.DOTALL | re.MULTILINE):
+            cname = m_cls.group(1).title()
+            cbody = m_cls.group(2)
+            spell_entries = []
+            for m_sp in re.finditer(r"^        \[(\d+)\]\s*=\s*\{\s*--\s*([^\n\r]+)\n(.*?)^        \},", cbody, re.DOTALL | re.MULTILINE):
+                sp_name = m_sp.group(2).strip()
+                sp_body = m_sp.group(3)
+                r_parts = []
+                for m_row in re.finditer(r"races\s*=\s*\{([^}]+)\},\s*level\s*=\s*(\d+),.*?quests\s*=\s*\{([^}]+)\}", sp_body):
+                    r_ids = [int(x) for x in re.findall(r"\d+", m_row.group(1))]
+                    lvl = int(m_row.group(2))
+                    q_ids = [int(x) for x in re.findall(r"\d+", m_row.group(3))]
+                    r_label = "All Races" if len(r_ids) >= 6 else "/".join(race_names.get(rid, f"Race#{rid}") for rid in r_ids)
+                    q_labels = []
+                    for qid in q_ids[:2]:
+                        if qid in quests:
+                            q_labels.append(f"{quests[qid].get(1, f'#{qid}')} (#{qid})")
+                        else:
+                            q_labels.append(f"#{qid}")
+                    r_parts.append(f"Lvl {lvl} ({r_label}: {', '.join(q_labels)})")
+                if r_parts:
+                    spell_entries.append(f"{sp_name}: {'; '.join(r_parts)}")
+            if spell_entries:
+                out.append((
+                    f"Class Quest Spells: {cname}",
+                    f"{cname.lower()} class quest quests spell spells ability trainer totem stance form pet mount warhorse charger dreadsteed",
+                    f"WoW Forever {cname} Class Quest Spells & Racial Abilities — " + " | ".join(spell_entries),
+                ))
+
+    return out
+
+
 STATE_FILE = os.path.join(BASE_DIR, ".wow_db_state.json")
 SHELDON_TARGET = os.environ.get("WOW_REMOTE_SYNC_TARGET", "user@your-agent-host:~/.openclaw/workspace/wow_forever.sqlite")
 
@@ -1074,13 +1325,17 @@ def compute_source_fingerprint() -> dict:
         ZONES_LUA,
         QUESTS_LUA,
         SUBZONES_LUA,
+        os.path.join(ADDON_DIR, r"support\Forever\Zones\dungeons.lua"),
         DROPS_LUA,
         DROP_CORR_LUA,
         XP_LUA,
         CLASSIC_ITEMS_JSON,
         ATLASLOOT_DROPRATE_LUA,
+        os.path.join(ADDON_ROOT, r"OpenMap\Data\Places.lua"),
+        os.path.join(ADDON_ROOT, r"OpenMap\Data\Levels.lua"),
         os.path.join(ADDON_ROOT, r"WhatsTraining\Classes\WeaponSkills.lua"),
         os.path.join(ADDON_ROOT, r"WhatsTraining\Classes\Camelot\WeaponSkills.lua"),
+        os.path.join(ADDON_ROOT, r"WhatsTraining\Classes\Camelot\QuestSpells.lua"),
         os.path.join(ADDON_ROOT, r"GatherLite\scripts\nodes.lua"),
         os.path.join(ADDON_ROOT, r"GatherLite\plugins\database\data\forever.lua"),
         os.path.join(ADDON_ROOT, r"GatherLite\plugins\fishing\data.lua"),
@@ -1089,6 +1344,11 @@ def compute_source_fingerprint() -> dict:
         os.path.join(ADDON_ROOT, r"Spoken_Bosses\Data\Stories.lua"),
         __file__,
     ]
+    recipe_dir = os.path.join(ADDON_ROOT, r"WhatsTraining\Crafting\Recipes\Camelot")
+    if os.path.isdir(recipe_dir):
+        for fn in sorted(os.listdir(recipe_dir)):
+            if fn.endswith(".lua"):
+                watched.append(os.path.join(recipe_dir, fn))
     fp = {}
     for p in watched:
         if os.path.exists(p):
@@ -1099,6 +1359,7 @@ def compute_source_fingerprint() -> dict:
 
 def sync_if_changed(force: bool = False):
     import subprocess
+    import sys
     cur_fp = compute_source_fingerprint()
     old_fp = {}
     if os.path.exists(STATE_FILE) and not force:
@@ -1113,6 +1374,12 @@ def sync_if_changed(force: bool = False):
     print("Addon update detected -> rebuilding wow_forever.sqlite and syncing to Sheldon...")
     build_sqlite()
     res = subprocess.run(["scp", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", OUT_DB, SHELDON_TARGET])
+    if res.returncode != 0:
+        wake_script = os.path.join(BASE_DIR, "wake_sheldon.py")
+        if os.path.exists(wake_script):
+            print("Target host asleep -> waking via wake_sheldon.py and retrying SCP...")
+            subprocess.run([sys.executable, wake_script, "--timeout", "25"])
+            res = subprocess.run(["scp", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", OUT_DB, SHELDON_TARGET])
     if res.returncode == 0:
         with open(STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(cur_fp, f, indent=2)

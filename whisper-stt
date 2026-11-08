@@ -303,7 +303,7 @@ def call_local_fast_butler(question: str, ctx: str, timeout: float = 9.0) -> tup
 
 
 
-GEMINI_MODEL = os.environ.get("VOICE_GEMINI_MODEL", "gemini-3.5-flash-lite")
+GEMINI_MODEL = os.environ.get("VOICE_GEMINI_MODEL", "gemini-3.5-flash")
 OPENCLAW_MINIMAX_QUERY = re.compile(r"\b(link\s+to|send\s+(?:a\s+|me\s+|us\s+|)?link|give\s+\w+\s+a\s+link|install\s+the\s+.*add-?on|curseforge|search\s+the\s+web|look\s+up\s+online)\b", re.I)
 
 
@@ -320,11 +320,20 @@ def get_gemini_key() -> str | None:
 
 
 def call_gemini_butler(question: str, ctx: str, timeout: float = 8.0) -> tuple[str | None, int]:
-    """Call Gemini 2.5 Flash (~1.5s, $0.0005/turn) for high-accuracy WoW Classic voice answers."""
+    """Call Gemini 3.5 Flash (thinkingBudget=0, ~750ms, ~$0.00035/turn with compact RAG) for high-accuracy voice answers."""
     t0 = time.perf_counter()
     key = get_gemini_key()
     if not key:
         return None, 0
+    if ctx:
+        is_lore_q = bool(re.search(r"\b(lore|history|story|who\s+is|tell\s+(?:me|us)\s+(?:a\s+little\s+bit\s+)?about)\b", question, re.I))
+        lines = ctx.splitlines()
+        compact = [lines[0]]
+        for r in lines[1:10]:
+            if r.startswith("- Lore (") and not is_lore_q and not re.search(r"Lore \((?:Weapon|Fishing|Gathering|Teldrassil)", r):
+                continue
+            compact.append(r[:420] if not is_lore_q else r[:900])
+        ctx = "\n".join(compact[:9])
     prompt = (
         "You are Alfred, a calm, understated, matter-of-fact British butler helping friends in Discord voice (mostly World of Warcraft Classic 1.12 / Forever, plus occasional real-life questions). Prioritize giving a clear, accurate, direct answer first, with natural, understated dry composure (never theatrical or forced; if a question is about real life rather than WoW, answer it normally and ignore unrelated WoW rows).\n"
         "Answer the player's question in 1 to 3 short spoken sentences (maximum 50 words).\n"

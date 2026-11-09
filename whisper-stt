@@ -69,7 +69,7 @@ COMPLEX_QUERY = re.compile(
     re.I,
 )
 UNCERTAIN_REPLY = re.compile(
-    r"\b(?:not\s+mentioned|don'?t\s+have|do\s+not\s+have|no\s+information|cannot\s+find|can'?t\s+find|unfortunately|not\s+in\s+the\s+provided|not\s+listed)\b",
+    r"\b(?:not\s+mentioned|not\s+specified|not\s+provided|not\s+stated|don'?t\s+have|do\s+not\s+have|no\s+information|cannot\s+find|can'?t\s+find|unfortunately|not\s+in\s+the\s+provided|not\s+listed|unknown\s+location)\b",
     re.I,
 )
 
@@ -227,12 +227,12 @@ PUSHBACK_OR_BETA_PAT = re.compile(
 def is_simple_wow_lookup(text: str, ctx: str, db_rows: int) -> bool:
     """Route to the local model for narrow "where is / who sells / what drops" lookups that ATLAS D(x) scores below 0.75.
     alfred-v1 (Gemma 4 7.5B) scored 10/10 on narrow lookups vs Gemma 4 E2B 6/10 (2026-11-08 bench).
-    "what level" / "what do I do with" / "how do I", cross-zone travel ("from X to Y"), night/daytime mechanics, directions, follow-up corrections, or pushback/beta queries stay on Gemini."""
+    "what level" / "what do I do with" / "how do I", quest chains ("first quest"), cross-zone travel ("from X to Y"), night/daytime mechanics, directions, follow-up corrections, or pushback/beta queries stay on Gemini."""
     return (
         bool(NARROW_LOOKUP_PAT.search(text))
         and not PUSHBACK_OR_BETA_PAT.search(text)
         and "[Follow-up to previous question:" not in text
-        and not re.search(r"\b(what\s+level|what\s+do\s+i\s+do\s+with|how\s+do\s+(?:i|we)|where\s+does\s+.*?\s+spawn|running\s+from|from\s+\w+(?:\s+\w+)?\s+to\s+\w+|between\s+\w+(?:\s+\w+)?\s+and\s+\w+|at\s+night|nighttime|worgen|directions?|plain\s+english|without\s+coords|without\s+coordinates)\b", text, re.I)
+        and not re.search(r"\b(what\s+level|what\s+do\s+i\s+do\s+with|how\s+do\s+(?:i|we)|where\s+does\s+.*?\s+spawn|first\s+quest|prereq\w*|quest\s+chain|quest\s+line|unlock|running\s+from|from\s+\w+(?:\s+\w+)?\s+to\s+\w+|between\s+\w+(?:\s+\w+)?\s+and\s+\w+|at\s+night|nighttime|worgen|directions?|plain\s+english|without\s+coords|without\s+coordinates)\b", text, re.I)
         and estimate_difficulty(text, ctx, db_rows) < 0.75
     )
 

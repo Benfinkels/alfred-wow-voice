@@ -354,6 +354,7 @@ STT_ALIASES = {
     r"\blo(?:r?d|rd)[aeo]?r[oa]n\b": "Lordaeron",
     r"\b(?:shadow\s*fang(?:\s+keep)?|shadow\s*fan\s*keep|sfk)\b": "Shadowfang Keep",
     r"\bsil(?:ver)?\s*pine(?:\s+forest)?\b": "Silverpine Forest",
+    r"\bver(?:i?gan'?s?|gan'?s?)\s+fist\b": "Verigan's Fist",
     r"\bexcavation\s+site(?:\s*:?\s*wetlands)?\b": "Excavation Site: Wetlands",
     r"\bkrol'?dok(?:\s+stronghold)?\b": "Krol'dok Stronghold",
     r"\bshaper'?s?\s+terrace\b": "Shaper's Terrace",
@@ -487,6 +488,62 @@ def query_lore(conn: sqlite3.Connection, text: str, limit: int = 2) -> list[str]
         return results[:limit]
     except Exception:
         return []
+
+
+def expand_quest_chains(conn: sqlite3.Connection, rows: list[str]) -> list[str]:
+    """When an Item or Quest row references a Reward/Start/Prereq Quest (#QID), append that quest's row and walk back its prereq chain to the root quest."""
+    cur = conn.cursor()
+    out = list(rows)
+    seen = set(out)
+    qids = [int(m) for r in rows for m in re.findall(r"(?:Reward from Quest|Starts Quest|Prereq|Quest): [^|#]*?\(#(\d+)\)", r)]
+    visited_qids = set()
+    for qid in qids[:3]:
+        curr = qid
+        chain_rows = []
+        root_starters = []
+        for _ in range(8):
+            if curr in visited_qids:
+                break
+            visited_qids.add(curr)
+            qrow = cur.execute("SELECT name, prereqs, summary FROM quests WHERE id = ?", (curr,)).fetchone()
+            if not qrow:
+                break
+            chain_rows.append((curr, qrow["name"], qrow["summary"]))
+            pm = re.search(r"\(#(\d+)\)", qrow["prereqs"] or "")
+            if pm:
+                curr = int(pm.group(1))
+            else:
+                # If a starter item starts this quest (e.g. Tome of Valor #1649), check if NPC breadcrumb quests reward that starter item (#1793 Stormwind / #1794 Ironforge)
+                im = re.search(r"Start: Item Drop '[^']+' \(#(\d+)\)", qrow["summary"])
+                if im:
+                    irow = cur.execute("SELECT summary FROM items WHERE id = ?", (int(im.group(1)),)).fetchone()
+                    rm = re.findall(r"Reward from Quest: (.*)", irow["summary"] if irow else "")
+                    bqids = re.findall(r"\(#(\d+)\)", rm[0]) if rm else []
+                    for bqid in bqids[:3]:
+                        brow = cur.execute("SELECT summary FROM quests WHERE id = ?", (int(bqid),)).fetchone()
+                        if brow:
+                            root_starters.append(brow["summary"])
+                break
+        if not root_starters and chain_rows:
+            root_starters = [chain_rows[-1][2]]
+        if chain_rows:
+            target_sum = chain_rows[0][2]
+            if target_sum in out:
+                out.remove(target_sum)
+            if len(chain_rows) > 1 or len(root_starters) > 1:
+                starts_desc = " OR ".join(
+                    re.sub(r"\s*\| Turn-in:.*$", "", rs.replace("Quest: ", ""))
+                    for rs in root_starters
+                )
+                target_sum += f" [Quest Chain Root: Starts with {starts_desc}]"
+            if target_sum not in seen:
+                seen.add(target_sum)
+                out.append(target_sum)
+            for rs in root_starters:
+                if rs not in seen:
+                    seen.add(rs)
+                    out.append(rs)
+    return out
 
 
 def auto_context(question: str, db_path: str = DEFAULT_DB) -> str:
@@ -645,7 +702,7 @@ def auto_context(question: str, db_path: str = DEFAULT_DB) -> str:
                     lines.append(s)
         # If the user is asking about a specific named entity (not a generic "what quests are in Zone"), put FTS entity matches BEFORE generic zone quests so top-6/top-9 truncation never drops the named NPC/quest/item!
         is_broad_zone_q = bool(re.search(r"\b(what\s+quests?|which\s+quests?|any\s+quests?|bosses\s+and\s+quests|quests\s+in)\b", q_lower))
-        fts_rows = query_fts(conn, remainder, limit=6)
+        fts_rows = expand_quest_chains(conn, query_fts(conn, remainder, limit=6))
         if not is_broad_zone_q:
             for r in fts_rows:
                 if "Wallace the Blind <Weaponsmith" in r and "[Always Neutral" not in r:
@@ -668,7 +725,7 @@ def auto_context(question: str, db_path: str = DEFAULT_DB) -> str:
                     lines.append(r)
     else:
         # No matched zone: check specific entity keywords directly
-        fts_rows = query_fts(conn, remainder, limit=6)
+        fts_rows = expand_quest_chains(conn, query_fts(conn, remainder, limit=6))
         for r in fts_rows:
             if "Wallace the Blind <Weaponsmith" in r and "[Always Neutral" not in r:
                 r += " [Always Neutral 24/7 (day & night) — stands by a cart on the main road just north of the Greymane Wall gate in southern Silverpine Forest, ~19 map units south of Shadowfang Keep / Pyrewood Village]"
@@ -715,6 +772,9 @@ def self_check():
     sfk_night = auto_context("Hey, Alfred, who is the vendor near Shadowfang Keep for Alliance at night, though?")
     first_npc = next((l for l in sfk_night.splitlines() if l.startswith("- NPC:")), "")
     assert first_npc.startswith("- NPC: Wallace the Blind") and "Always Neutral 24/7" in sfk_night, f"Failed SFK night vendor check: {sfk_night}"
+    # 6. Verify quest chain root expansion for Verigan's Fist -> The Tome of Valor (Duthorian Rall & Tiza Battleforge)
+    vf = auto_context("Hey, Alfred, for that quest for Vergan's fist, what is the first quest I need to pick up to get it, and where do I grab it from?")
+    assert "The Tome of Valor" in vf and "Duthorian Rall" in vf and "Tiza Battleforge" in vf, f"Failed Verigan's Fist chain check: {vf}"
     conn.close()
     print("SELF-CHECK PASSED!")
     print("\n--- Sample Auto-Context Output for 'Westfall at level 10' ---")

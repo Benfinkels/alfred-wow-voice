@@ -110,7 +110,7 @@ def classify(text: str, playing: bool = False) -> str:
 
 
 NARROW_LOOKUP_PAT = re.compile(
-    r"\b(where\s+(?:is|are|can\s+i|do\s+i)|who\s+(?:drops?|sells?|starts?|turns?\s+in)|what\s+(?:drops?|level|do\s+i\s+do\s+with)|how\s+do\s+i\s+(?:get|make|find|start|turn\s+in)|repair|vendor|innkeeper|flight\s+master|trainer)\b",
+    r"\b(where\s+(?:is|are|can\s+i|do\s+i|does\s+.*?\s+spawn)|who\s+(?:drops?|sells?|starts?|turns?\s+in)|what\s+(?:drops?|level|do\s+i\s+do\s+with)|how\s+do\s+i\s+(?:get|make|find|start|turn\s+in)|repair|vendor|innkeeper|flight\s+master|trainer|spawns?)\b",
     re.I,
 )
 BROAD_STRATEGY_PAT = re.compile(
@@ -142,7 +142,7 @@ CASUAL_BANTER_PAT = re.compile(
     re.I,
 )
 WOW_SIGNAL_PAT = re.compile(
-    r"\b(quest|quests|turn[\s\-]+in|drop|drops|drop\s+rate|vendor|repair|trainer|train|flight\s+master|gryphon|wyvern|hippogryph|innkeeper|inn|xp|level|lvl|mob|mobs|boss|bosses|aggro|pull|wipe|loot|bis|dps|tank|heal|healer|mana|spell|spells|talent|talents|rank|cooldown|reagent|buff|debuff|bag|bags|bank|hearthstone|mount|guild|raids?|dungeons?|instances?|graveyard|corpse|respawn|node|vein|herb|herbalism|fish|fishing|skinning|mining|blacksmith\w*|alchem\w*|leatherwork\w*|tailor\w*|enchant\w*|cook\w*|first\s+aid|camp|camping|turtle|forever|classic|azeroth|kalimdor|alliance|horde|paladin|warrior|hunter|rogue|priest|mage|warlock|druid|shaman|murloc\w*|gnoll\w*|defias|kobold\w*|sylvanas|thrall|arthas|azshara|cenarius|furlbrow\w*|gnomeregan|deadmines|wailing\s+caverns|shadowfang|blackfathom|stockade|razorfen|scarlet\s+monastery|uldaman|zul'?farrak|maraudon|sunken\s+temple|blackrock|scholomance|stratholme|molten\s+core|onyxia|bwl|naxx\w*|halls?\s+of\s+th(?:ane|ain)s?|thane\w*|lordaeron|excavation\s+site|dalaran|drowned\s+city|krol'?dok|alcaz|blackmaw|shaper'?s\s+terrace|riverglades|farholde|way|coords|coordinates)\b",
+    r"\b(quest|quests|turn[\s\-]+in|drop|drops|drop\s+rate|vendor|repair|trainer|train|flight\s+master|gryphon|wyvern|hippogryph|innkeeper|inn|xp|level|lvl|mob|mobs|boss|bosses|rare|spawn|spawns|aggro|pull|wipe|loot|bis|dps|tank|heal|healer|mana|spell|spells|talent|talents|rank|cooldown|reagent|buff|debuff|bag|bags|bank|hearthstone|mount|guild|raids?|dungeons?|instances?|graveyard|corpse|respawn|node|vein|herb|herbalism|fish|fishing|skinning|mining|blacksmith\w*|alchem\w*|leatherwork\w*|tailor\w*|enchant\w*|cook\w*|first\s+aid|camp|camping|turtle|forever|classic|azeroth|kalimdor|alliance|horde|paladin|warrior|hunter|rogue|priest|mage|warlock|druid|shaman|murloc\w*|gnoll\w*|defias|kobold\w*|sylvanas|thrall|arthas|azshara|cenarius|furlbrow\w*|gnomeregan|deadmines|wailing\s+caverns|shadowfang|sfk|blackfathom|stockade|razorfen|scarlet\s+monastery|uldaman|zul'?farrak|maraudon|sunken\s+temple|blackrock|scholomance|stratholme|molten\s+core|onyxia|bwl|naxx\w*|halls?\s+of\s+th(?:ane|ain)s?|thane\w*|lordaeron|excavation\s+site|dalaran|drowned\s+city|krol'?dok|alcaz|blackmaw|shaper'?s\s+terrace|riverglades|farholde|way|coords|coordinates)\b",
     re.I,
 )
 
@@ -150,11 +150,9 @@ WOW_SIGNAL_PAT = re.compile(
 def is_casual_or_random(text: str, ctx: str, db_rows: int) -> bool:
     """Route casual greetings, real-life/off-topic questions, and non-WoW remarks to Local Gemma 4 E2B ($0)."""
     stripped = re.sub(rf"^\s*(?:hey[\s,]+)?{WAKE_PAT}[\s,!.?]*", "", text, flags=re.I).strip()
-    if len(stripped.split()) <= 2 or CASUAL_BANTER_PAT.search(stripped):
+    if CASUAL_BANTER_PAT.search(stripped):
         return True
-    if WOW_SIGNAL_PAT.search(stripped):
-        return False
-    if "- Landmark (" in ctx:
+    if WOW_SIGNAL_PAT.search(stripped) or "- Landmark (" in ctx:
         return False
     # Check if any known WoW zone or town is in the query, or if 2+ distinct query words match a single WoW entity
     try:
@@ -164,6 +162,8 @@ def is_casual_or_random(text: str, ctx: str, db_rows: int) -> bool:
             return False
     except Exception:
         pass
+    if len(stripped.split()) <= 2:
+        return True
     q_stems = {w[:5] for w in re.findall(r"[a-z0-9]+", stripped.lower()) if len(w) >= 4 and w not in {"what", "where", "when", "which", "there", "about", "tell", "little", "have", "this", "that", "with", "from", "your", "should", "would", "could", "long"}}
     for line in ctx.splitlines()[1:4]:
         head = line.split("|")[0].lower()
@@ -224,8 +224,14 @@ PUSHBACK_OR_BETA_PAT = re.compile(
 def is_simple_wow_lookup(text: str, ctx: str, db_rows: int) -> bool:
     """Route to the local model for narrow "where is / who sells / what drops" lookups that ATLAS D(x) scores below 0.75.
     alfred-v1 (Gemma 4 7.5B) scored 10/10 on narrow lookups vs Gemma 4 E2B 6/10 (2026-11-08 bench).
-    "what level" / "what do I do with" / "how do I" or pushback/beta queries stay on Gemini."""
-    return bool(NARROW_LOOKUP_PAT.search(text)) and not PUSHBACK_OR_BETA_PAT.search(text) and not re.search(r"\b(what\s+level|what\s+do\s+i\s+do\s+with|how\s+do\s+(?:i|we))\b", text, re.I) and estimate_difficulty(text, ctx, db_rows) < 0.75
+    "what level" / "what do I do with" / "how do I", cross-zone travel ("from X to Y"), follow-up corrections, or pushback/beta queries stay on Gemini."""
+    return (
+        bool(NARROW_LOOKUP_PAT.search(text))
+        and not PUSHBACK_OR_BETA_PAT.search(text)
+        and "[Follow-up to previous question:" not in text
+        and not re.search(r"\b(what\s+level|what\s+do\s+i\s+do\s+with|how\s+do\s+(?:i|we)|where\s+does\s+.*?\s+spawn|running\s+from|from\s+\w+(?:\s+\w+)?\s+to\s+\w+|between\s+\w+(?:\s+\w+)?\s+and\s+\w+)\b", text, re.I)
+        and estimate_difficulty(text, ctx, db_rows) < 0.75
+    )
 
 
 FEATURE_LOG_PATH = os.environ.get("VOICE_FEATURE_LOG", os.path.expanduser("~/.openclaw/logs/feature-requests.jsonl"))
@@ -532,12 +538,28 @@ def main():
     ctx = ""
     if woke:
         try:
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            import wow_db
+            text = wow_db.normalize_stt(strip_pre_wake(text))
+            # If this is a short follow-up/correction (<9 words, e.g. "Alfred, I'm Alliance" or "Can you double check that?"), attach the previous woke turn for context.
+            stripped_q = re.sub(rf"^\s*(?:hey[\s,]+)?{WAKE_PAT}[\s,!.?]*", "", text, flags=re.I).strip()
+            if len(stripped_q.split()) <= 8 and os.path.exists(LOG_PATH) and not CASUAL_BANTER_PAT.search(stripped_q):
+                try:
+                    rlines = [json.loads(l) for l in open(LOG_PATH).read().splitlines()[-12:] if l.strip()]
+                    prev_q, prev_a = "", ""
+                    for r in reversed(rlines):
+                        if r.get("kind") == "tts" and not prev_a:
+                            prev_a = r.get("spoken") or ""
+                        elif r.get("kind") == "stt" and r.get("woke"):
+                            prev_q = r.get("text") or ""
+                            break
+                    if prev_q and (PUSHBACK_OR_BETA_PAT.search(stripped_q) or re.search(r"\b(alliance|horde|level|lvl|Wait|no|actually|meant|what\s+about)\b", stripped_q, re.I)):
+                        text = f"{text} [Follow-up to previous question: \"{prev_q}\" where you answered: \"{prev_a}\"]"
+                except Exception:
+                    pass
             if CONTEXT_CMD:
                 ctx = subprocess.check_output(CONTEXT_CMD, input=text, shell=True, text=True, timeout=3).strip()
             else:
-                sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-                import wow_db
-                text = wow_db.normalize_stt(strip_pre_wake(text))
                 ctx = wow_db.auto_context(text)
         except Exception:
             ctx = ""
@@ -586,8 +608,8 @@ def main():
                 fast_reply, local_ms = call_gemini_butler(text, ctx)
                 arm = "B_CLOUD_GEMINI" if fast_reply else "B_CLOUD_MINIMAX"
         else:
-            # Open-ended, pushback/beta, or low-confidence WoW questions get SEO-guided Google Search grounding.
-            grounded = not NARROW_LOOKUP_PAT.search(text) or db_rows == 0 or bool(PUSHBACK_OR_BETA_PAT.search(text)) or estimate_difficulty(text, ctx, db_rows) >= 0.55
+            # Open-ended, pushback/beta, follow-ups, or low-confidence WoW questions get SEO-guided Google Search grounding.
+            grounded = not NARROW_LOOKUP_PAT.search(text) or db_rows == 0 or bool(PUSHBACK_OR_BETA_PAT.search(text)) or "[Follow-up to previous question:" in text or bool(re.search(r"\bwhere\s+does\s+.*?\s+spawn\b", text, re.I)) or estimate_difficulty(text, ctx, db_rows) >= 0.55
             fast_reply, local_ms = call_gemini_butler(text, ctx, grounded=grounded)
             if grounded and not fast_reply:
                 fast_reply, local_ms = call_gemini_butler(text, ctx)

@@ -803,6 +803,7 @@ def build_sqlite():
         subname = f"{raw_subname} [{role_suffix}]".strip() if role_suffix and role_suffix.lower() not in raw_subname.lower() else raw_subname
 
         faction = str(d.get(13) or "Both")
+        fac_label = {"A": "Alliance", "H": "Horde", "AH": "Neutral"}.get(faction, "")
         primary_zone, coords_str = format_spawns(d.get(7), d.get(9), resolve_zone)
         if nid in WEAPON_MASTER_SKILLS:
             _, wm_loc, _ = WEAPON_MASTER_SKILLS[nid]
@@ -819,7 +820,8 @@ def build_sqlite():
         if rank_str:
             lvl_s += f" [{rank_str}]"
         tag_s = f" <{subname}>" if subname else ""
-        summary = f"NPC: {name}{tag_s} (#{nid}) | {lvl_s} | {coords_str or primary_zone}"
+        fac_s = f" | Faction: {fac_label}" if fac_label else ""
+        summary = f"NPC: {name}{tag_s} (#{nid}) | {lvl_s}{fac_s} | {coords_str or primary_zone}"
         if nid in WEAPON_MASTER_SKILLS:
             summary += f" | Teaches Weapon Skills: {WEAPON_MASTER_SKILLS[nid][2]}"
         if nid in boss_loot:

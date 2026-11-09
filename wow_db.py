@@ -350,8 +350,9 @@ STT_ALIASES = {
     r"\b(?:archmaid\s+)?theocrat[iu]s\b": "Theocritus",
     r"\bsentinel\s+tower\b": "Sentinel Hill",
     r"\b(?:north\s+thane(?:\s+iron\s*forge)?|(?:the\s+)?halls?\s+of\s+th(?:ane|ain)s?)\b": "The Hall of Thanes",
-    r"\bruins\s+of\s+lo(?:r?d|rd)[ae]?r[oa]n\b": "Ruins of Lordaeron",
-    r"\blo(?:r?d|rd)[ae]?r[oa]n\b": "Lordaeron",
+    r"\bruins\s+of\s+lo(?:r?d|rd)[aeo]?r[oa]n\b": "Ruins of Lordaeron",
+    r"\blo(?:r?d|rd)[aeo]?r[oa]n\b": "Lordaeron",
+    r"\b(?:shadow\s*fang(?:\s+keep)?|sfk)\b": "Shadowfang Keep",
     r"\bexcavation\s+site(?:\s*:?\s*wetlands)?\b": "Excavation Site: Wetlands",
     r"\bkrol'?dok(?:\s+stronghold)?\b": "Krol'dok Stronghold",
     r"\bshaper'?s?\s+terrace\b": "Shaper's Terrace",
@@ -560,10 +561,49 @@ def auto_context(question: str, db_path: str = DEFAULT_DB) -> str:
                         prof_stem = role
                         break
             want_trainer = 1 if re.search(r"\b(trainer|train|learn|leatherwork|skin|cook|alchem|herb|min|tailor|enchant|first\s+aid)\b", q_lower) else 0
+            # Expand dungeon names to their outdoor host zone and include adjacent route zones for cross-zone/enemy-capital queries.
+            DUNGEON_HOST_ZONE = {
+                "Shadowfang Keep": "Silverpine Forest", "Ruins of Lordaeron": "Tirisfal Glades",
+                "Scarlet Monastery": "Tirisfal Glades", "The Deadmines": "Westfall",
+                "The Stockade": "Stormwind City", "The Hall of Thanes": "Ironforge",
+                "Gnomeregan": "Dun Morogh", "Excavation Site: Wetlands": "Wetlands",
+                "City of Dalaran": "Alterac Mountains", "Wailing Caverns": "The Barrens",
+                "Razorfen Kraul": "The Barrens", "Razorfen Downs": "The Barrens",
+                "Blackfathom Deeps": "Ashenvale", "Uldaman": "Badlands", "Zul'Farrak": "Tanaris",
+                "Maraudon": "Desolace", "The Drowned City": "Swamp of Sorrows",
+                "Krol'dok Stronghold": "Riverglades", "Alcaz Prison": "Dustwallow Marsh",
+            }
+            ROUTE_NEIGHBORS = {
+                "Undercity": ["Tirisfal Glades", "Silverpine Forest", "Hillsbrad Foothills"],
+                "Tirisfal Glades": ["Silverpine Forest", "Hillsbrad Foothills"],
+                "Silverpine Forest": ["Hillsbrad Foothills", "Tirisfal Glades"],
+                "Orgrimmar": ["Durotar", "The Barrens"],
+                "Durotar": ["The Barrens"],
+                "Thunder Bluff": ["Mulgore", "The Barrens"],
+            }
+            svc_zones: list[str] = []
+            for mz in matched_zones:
+                if mz not in PROF_ZONES and mz not in svc_zones:
+                    svc_zones.append(mz)
+                hz = DUNGEON_HOST_ZONE.get(mz)
+                if hz and hz not in svc_zones:
+                    svc_zones.append(hz)
+            for mz in list(svc_zones):
+                for nz in ROUTE_NEIGHBORS.get(mz, ()):
+                    if nz not in svc_zones:
+                        svc_zones.append(nz)
+            if not svc_zones:
+                svc_zones = [matched_zone]
+            # Default to Alliance-friendly NPCs unless the speaker explicitly asks for Horde (without Alliance).
+            ask_horde = bool(re.search(r"\bhorde\b", q_lower)) and not bool(re.search(r"\balliance\b", q_lower))
+            excl_faction = "A" if ask_horde else "H"
+            pref_faction = "H" if ask_horde else "A"
+            z_placeholders = ",".join("?" for _ in svc_zones)
+            z_order_case = " ".join(f"WHEN zone = ? THEN {i}" for i, _ in enumerate(svc_zones))
             npc_rows = conn.execute(
-                """
-                SELECT summary, subname, coords FROM npcs
-                WHERE zone LIKE ? AND coords NOT LIKE '%(0.0, 0.0)%' AND name NOT LIKE 'World %'
+                f"""
+                SELECT summary, subname, coords, zone, faction FROM npcs
+                WHERE zone IN ({z_placeholders}) AND faction != ? AND coords NOT LIKE '%(0.0, 0.0)%' AND name NOT LIKE 'World %'
                   AND (
                     subname LIKE '%Bowyer%' OR subname LIKE '%Gun%' OR subname LIKE '%Ammo%'
                     OR subname LIKE '%Armor%' OR subname LIKE '%Weapon%' OR subname LIKE '%Smith%'
@@ -572,10 +612,14 @@ def auto_context(question: str, db_path: str = DEFAULT_DB) -> str:
                     OR subname LIKE '%Gryphon%' OR subname LIKE '%Flight%' OR subname LIKE '%Wyvern%'
                     OR subname LIKE '%Bat%' OR subname LIKE '%Trainer%' OR subname LIKE '%Stable%'
                   )
-                ORDER BY (subname LIKE ?) DESC, (? AND subname LIKE '%Trainer%') DESC, (subname LIKE '%[Repair Vendor]%' OR subname LIKE '%[Flight Master]%' OR subname LIKE '%[Innkeeper]%') DESC, (subname LIKE '%Bowyer%' OR subname LIKE '%Gun%' OR subname LIKE '%Armor%' OR subname LIKE '%Smith%' OR subname LIKE '%General%' OR subname LIKE '%Trade%') DESC, id
+                ORDER BY (subname LIKE ?) DESC, (? AND subname LIKE '%Trainer%') DESC,
+                         (subname LIKE '%[Repair Vendor]%' OR subname LIKE '%[Flight Master]%' OR subname LIKE '%[Innkeeper]%') DESC,
+                         CASE {z_order_case} ELSE 99 END ASC,
+                         (faction = ?) DESC,
+                         (subname LIKE '%Bowyer%' OR subname LIKE '%Gun%' OR subname LIKE '%Armor%' OR subname LIKE '%Smith%' OR subname LIKE '%General%' OR subname LIKE '%Trade%') DESC, id
                 LIMIT 18
                 """,
-                (f"%{matched_zone}%", f"%{prof_stem}%", want_trainer),
+                (*svc_zones, excl_faction, f"%{prof_stem}%", want_trainer, *svc_zones, pref_faction),
             ).fetchall()
             if matched_hub and TOWN_HUB_COORDS[matched_hub][0] == matched_zone:
                 import math
@@ -644,6 +688,9 @@ def self_check():
     assert "Lore (Murloc):" in ml and "gorlocs" in ml.lower(), f"Failed Murloc lore check: {ml}"
     dr = auto_context("How do I get Cat Form as a Druid in WoW Forever?")
     assert "Class Quest Spells: Druid" in dr and "#98397" in dr, f"Failed Druid Class Quest Spells check: {dr}"
+    # 5. Verify Alliance faction & cross-zone route filtering on Undercity -> Shadowfang Keep repair lookup
+    uc_sfk = auto_context("Hey, Alfred, I'm running from Undercity to Shadow Fang Keep as Alliance. Where is the nearest place I can repair my gear?")
+    assert "Pyrewood Armorer" in uc_sfk and "Wallace the Blind" in uc_sfk and "Lauren Newcomb" not in uc_sfk, f"Failed UC->SFK Alliance repair check: {uc_sfk}"
     conn.close()
     print("SELF-CHECK PASSED!")
     print("\n--- Sample Auto-Context Output for 'Westfall at level 10' ---")

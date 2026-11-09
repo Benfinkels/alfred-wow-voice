@@ -490,13 +490,15 @@ def query_lore(conn: sqlite3.Connection, text: str, limit: int = 2) -> list[str]
         return []
 
 
-def expand_quest_chains(conn: sqlite3.Connection, rows: list[str]) -> list[str]:
-    """When an Item or Quest row references a Reward/Start/Prereq Quest (#QID), append that quest's row and walk back its prereq chain to the root quest."""
+def expand_quest_chains(conn: sqlite3.Connection, rows: list[str], ask_horde: bool = False) -> list[str]:
+    """When an Item or Quest row references a Reward/Start/Prereq Quest (#QID), annotate the quest with its root starter and append root starter quest rows without displacing top FTS matches."""
     cur = conn.cursor()
     out = list(rows)
     seen = set(out)
+    excl_tag = "| Faction: Alliance" if ask_horde else "| Faction: Horde"
     qids = [int(m) for r in rows for m in re.findall(r"(?:Reward from Quest|Starts Quest|Prereq|Quest): [^|#]*?\(#(\d+)\)", r)]
     visited_qids = set()
+    appended_roots: list[str] = []
     for qid in qids[:3]:
         curr = qid
         chain_rows = []
@@ -506,7 +508,7 @@ def expand_quest_chains(conn: sqlite3.Connection, rows: list[str]) -> list[str]:
                 break
             visited_qids.add(curr)
             qrow = cur.execute("SELECT name, prereqs, summary FROM quests WHERE id = ?", (curr,)).fetchone()
-            if not qrow:
+            if not qrow or excl_tag in qrow["summary"]:
                 break
             chain_rows.append((curr, qrow["name"], qrow["summary"]))
             pm = re.search(r"\(#(\d+)\)", qrow["prereqs"] or "")
@@ -521,29 +523,32 @@ def expand_quest_chains(conn: sqlite3.Connection, rows: list[str]) -> list[str]:
                     bqids = re.findall(r"\(#(\d+)\)", rm[0]) if rm else []
                     for bqid in bqids[:3]:
                         brow = cur.execute("SELECT summary FROM quests WHERE id = ?", (int(bqid),)).fetchone()
-                        if brow:
+                        if brow and excl_tag not in brow["summary"]:
                             root_starters.append(brow["summary"])
                 break
         if not root_starters and chain_rows:
             root_starters = [chain_rows[-1][2]]
         if chain_rows:
             target_sum = chain_rows[0][2]
-            if target_sum in out:
-                out.remove(target_sum)
+            annotated = target_sum
             if len(chain_rows) > 1 or len(root_starters) > 1:
                 starts_desc = " OR ".join(
                     re.sub(r"\s*\| Turn-in:.*$", "", rs.replace("Quest: ", ""))
                     for rs in root_starters
                 )
-                target_sum += f" [Quest Chain Root: Starts with {starts_desc}]"
-            if target_sum not in seen:
-                seen.add(target_sum)
-                out.append(target_sum)
+                annotated = f"{target_sum} [Quest Chain Root: Starts with {starts_desc}]"
+            if target_sum in out:
+                idx = out.index(target_sum)
+                out[idx] = annotated
+                seen.add(annotated)
+            elif annotated not in seen:
+                seen.add(annotated)
+                appended_roots.append(annotated)
             for rs in root_starters:
                 if rs not in seen:
                     seen.add(rs)
-                    out.append(rs)
-    return out
+                    appended_roots.append(rs)
+    return out + appended_roots
 
 
 def auto_context(question: str, db_path: str = DEFAULT_DB) -> str:
@@ -601,9 +606,10 @@ def auto_context(question: str, db_path: str = DEFAULT_DB) -> str:
         for part in matched_zone.lower().split():
             remainder = re.sub(rf"\b{re.escape(part)}\b", " ", remainder)
 
+    ask_horde = bool(re.search(r"\bhorde\b", q_lower)) and not bool(re.search(r"\balliance\b", q_lower))
     # If matched_zone is a class/profession category (not a geographic zone), prioritize specific FTS entity matches first
     if matched_zone in PROF_ZONES:
-        for r in query_fts(conn, remainder, limit=6):
+        for r in expand_quest_chains(conn, query_fts(conn, remainder, limit=6), ask_horde=ask_horde):
             if r not in lines:
                 lines.append(r)
 
@@ -702,7 +708,7 @@ def auto_context(question: str, db_path: str = DEFAULT_DB) -> str:
                     lines.append(s)
         # If the user is asking about a specific named entity (not a generic "what quests are in Zone"), put FTS entity matches BEFORE generic zone quests so top-6/top-9 truncation never drops the named NPC/quest/item!
         is_broad_zone_q = bool(re.search(r"\b(what\s+quests?|which\s+quests?|any\s+quests?|bosses\s+and\s+quests|quests\s+in)\b", q_lower))
-        fts_rows = expand_quest_chains(conn, query_fts(conn, remainder, limit=6))
+        fts_rows = expand_quest_chains(conn, query_fts(conn, remainder, limit=6), ask_horde=ask_horde)
         if not is_broad_zone_q:
             for r in fts_rows:
                 if "Wallace the Blind <Weaponsmith" in r and "[Always Neutral" not in r:
@@ -725,7 +731,7 @@ def auto_context(question: str, db_path: str = DEFAULT_DB) -> str:
                     lines.append(r)
     else:
         # No matched zone: check specific entity keywords directly
-        fts_rows = expand_quest_chains(conn, query_fts(conn, remainder, limit=6))
+        fts_rows = expand_quest_chains(conn, query_fts(conn, remainder, limit=6), ask_horde=ask_horde)
         for r in fts_rows:
             if "Wallace the Blind <Weaponsmith" in r and "[Always Neutral" not in r:
                 r += " [Always Neutral 24/7 (day & night) — stands by a cart on the main road just north of the Greymane Wall gate in southern Silverpine Forest, ~19 map units south of Shadowfang Keep / Pyrewood Village]"

@@ -139,7 +139,7 @@ def estimate_difficulty(text: str, ctx: str, db_rows: int) -> float:
 
 
 CASUAL_BANTER_PAT = re.compile(
-    r"\b(what'?s\s+up|what\s+is\s+up|how\s+are\s+you|how'?s\s+it\s+going|how\s+you\s+doing|good\s+(?:morning|afternoon|evening|night)|are\s+you\s+(?:there|awake|listening|recording)|tell\s+(?:me\s+|us\s+)?a\s+joke|roast\s+|what\s+do\s+you\s+think\s+of|who\s+is\s+(?:your\s+favorite|the\s+worst|the\s+best)|would\s+you\s+rather|meaning\s+of\s+life|microwave|rotisser\w*|air\s+fryer|oven|fridge|dishwasher|laundry|pizza|coffee|beer|workout|gym|weather|movie|tv\s+show|football|basketball|baseball|soccer)\b",
+    r"\b(what'?s\s+up|what\s+is\s+up|how\s+are\s+you|how'?s\s+it\s+going|how\s+you\s+doing|good\s+(?:morning|afternoon|evening|night)|are\s+you\s+(?:there|awake|listening|recording)|tell\s+(?:me\s+|us\s+)?a\s+joke|roast\s+|comebacks?|literally\s+nothing|(?:was|were)\s+right|you\s+suck|smart\s*ass|nerd|what\s+do\s+you\s+think\s+of|who\s+is\s+(?:your\s+favorite|the\s+worst|the\s+best)|would\s+you\s+rather|meaning\s+of\s+life|microwave|rotisser\w*|air\s+fryer|oven|fridge|dishwasher|laundry|pizza|coffee|beer|workout|gym|weather|movie|tv\s+show|football|basketball|baseball|soccer)\b",
     re.I,
 )
 WOW_SIGNAL_PAT = re.compile(
@@ -165,8 +165,9 @@ def is_casual_or_random(text: str, ctx: str, db_rows: int) -> bool:
         pass
     if len(stripped.split()) <= 2:
         return True
-    q_stems = {w[:5] for w in re.findall(r"[a-z0-9]+", stripped.lower()) if len(w) >= 4 and w not in {"what", "where", "when", "which", "there", "about", "tell", "little", "have", "this", "that", "with", "from", "your", "should", "would", "could", "long", "friend", "does", "give", "plain", "english"}}
-    for line in ctx.splitlines()[1:5]:
+    stop = {"what", "where", "when", "which", "there", "about", "tell", "little", "have", "this", "that", "with", "from", "your", "should", "would", "could", "long", "friend", "does", "give", "plain", "english", "found", "right", "check", "better", "nothing", "literally", "warned", "standards", "trying", "pretty", "actually", "think", "thought", "going", "gonna"}
+    q_stems = {w[:5] for w in re.findall(r"[a-z0-9]+", stripped.lower()) if len(w) >= 4 and w not in stop}
+    for line in ctx.splitlines()[1:6]:
         head = line.split("|")[0].lower()
         if sum(1 for s in q_stems if s in head) >= 1 and not line.startswith("- Lore ("):
             return False
@@ -332,15 +333,25 @@ def call_local_fast_butler(question: str, ctx: str, timeout: float = 9.0) -> tup
 
 
 def local_answer_ok(question: str, facts: str, ans: str) -> bool:
-    """Verify-then-escalate: reject local answers that dodge, omit coordinates, borrow landmark coords, or name the wrong role."""
+    """Verify-then-escalate: reject local answers that dodge, omit coordinates, borrow lore/landmark/other-NPC coords, or name the wrong role."""
     if not ans or "ESCALATE" in ans.upper() or UNCERTAIN_REPLY.search(ans) or len(ans) > 420:
         return False
-    if re.search(r"\b(where|closest|located)\b", question, re.I) and re.search(r"\(\d+\.\d+,\s*\d+\.\d+\)", facts) and not re.search(r"\b\d{1,2}(?:\.\d+)?\s*,\s*\d{1,2}(?:\.\d+)?\b", ans):
+    entity_lines = [l for l in facts.splitlines() if not l.lstrip("- ").startswith(("Lore (", "Landmark ("))]
+    entity_blob = "\n".join(entity_lines)
+    if re.search(r"\b(where|closest|nearest|located|location|coordinates|coords|grab|pick\s+up)\b", question, re.I) and re.search(r"\(\d+\.\d+,\s*\d+\.\d+\)", entity_blob) and not re.search(r"\b\d{1,2}(?:\.\d+)?\s*,\s*\d{1,2}(?:\.\d+)?\b", ans):
         return False
-    # Every spoken coordinate must be some NPC/object's own position, not a town-hub/landmark coordinate it borrowed.
-    own = set(re.findall(r"\|[^|\[\]]*?\((\d+\.\d+),\s*(\d+\.\d+)\)", facts))
-    if any((x, y) not in own for x, y in re.findall(r"(\d{1,2}\.\d)\s*,\s*(\d{1,2}\.\d)", ans)):
+    # Every spoken coordinate must be an NPC/object/quest's own position (never a Lore dungeon entrance or town-hub Landmark coordinate).
+    own = set(re.findall(r"\|[^|\[\]]*?\((\d+\.\d+),\s*(\d+\.\d+)\)", entity_blob))
+    spoken_coords = re.findall(r"(\d{1,2}\.\d)\s*,\s*(\d{1,2}\.\d)", ans)
+    if any((x, y) not in own for x, y in spoken_coords):
         return False
+    # If the answer explicitly names an NPC from facts, every spoken coordinate must appear on one of the named NPCs' rows.
+    if spoken_coords:
+        named_npc_rows = [l for l in entity_lines for m in [re.search(r"NPC:\s*([^<|(#]+)", l)] if m and m.group(1).strip().lower() in ans.lower()]
+        if named_npc_rows:
+            npc_own = set(re.findall(r"\|[^|\[\]]*?\((\d+\.\d+),\s*(\d+\.\d+)\)", "\n".join(named_npc_rows)))
+            if any((x, y) not in npc_own for x, y in spoken_coords):
+                return False
     # Role questions ("buy arrows", "innkeeper") must name an NPC whose title actually has that role (not a nearby Trade Supplies vendor).
     for q_pat, role_pat in ROLE_GUARDS:
         if re.search(q_pat, question, re.I):
@@ -352,12 +363,16 @@ def local_answer_ok(question: str, facts: str, ans: str) -> bool:
 
 if os.environ.get("WHISPER_STT_SELFTEST"):
     _F = ("Landmark (Sentinel Hill): Located in Westfall at (56.5, 52.6)\n"
+          "- Lore (Shadowfang Keep): Instance entrance at Silverpine Forest (44.8, 67.8) | Level 18-25\n"
           "- NPC: William MacGregor <Bowyer [Repair Vendor]> (#1668) | Lvl 15 | Westfall (57.7, 53.9) [INSIDE Sentinel Hill (56.5, 52.6)]\n"
           "- NPC: Gina MacGregor <Trade Supplies [Vendor]> (#843) | Lvl 15 | Westfall (57.6, 54.0)")
     _Q = "where can I buy arrows near Sentinel Hill"
     assert local_answer_ok(_Q, _F, "William MacGregor sells arrows at 57.7, 53.9, sir.")
+    assert local_answer_ok("where is he located", _F, "He is at 57.7, 53.9, sir.")  # pronoun reply allowed
     assert not local_answer_ok(_Q, _F, "Gina MacGregor at 57.6, 54.0 sells trade supplies.")  # wrong role
     assert not local_answer_ok(_Q, _F, "William MacGregor is at 56.5, 52.6.")  # borrowed landmark coords
+    assert not local_answer_ok(_Q, _F, "William MacGregor is at 44.8, 67.8.")  # borrowed Lore dungeon entrance coords
+    assert not local_answer_ok(_Q, _F, "William MacGregor sells arrows at 57.6, 54.0.")  # cross-NPC coordinate swap
     assert not local_answer_ok(_Q, _F, "William MacGregor sells arrows nearby.")  # where-question with no coords
     assert not local_answer_ok(_Q, _F, "ESCALATE")
     print("whisper-stt self-test ok")

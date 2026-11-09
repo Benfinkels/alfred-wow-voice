@@ -352,7 +352,8 @@ STT_ALIASES = {
     r"\b(?:north\s+thane(?:\s+iron\s*forge)?|(?:the\s+)?halls?\s+of\s+th(?:ane|ain)s?)\b": "The Hall of Thanes",
     r"\bruins\s+of\s+lo(?:r?d|rd)[aeo]?r[oa]n\b": "Ruins of Lordaeron",
     r"\blo(?:r?d|rd)[aeo]?r[oa]n\b": "Lordaeron",
-    r"\b(?:shadow\s*fang(?:\s+keep)?|sfk)\b": "Shadowfang Keep",
+    r"\b(?:shadow\s*fang(?:\s+keep)?|shadow\s*fan\s*keep|sfk)\b": "Shadowfang Keep",
+    r"\bsil(?:ver)?\s*pine(?:\s+forest)?\b": "Silverpine Forest",
     r"\bexcavation\s+site(?:\s*:?\s*wetlands)?\b": "Excavation Site: Wetlands",
     r"\bkrol'?dok(?:\s+stronghold)?\b": "Krol'dok Stronghold",
     r"\bshaper'?s?\s+terrace\b": "Shaper's Terrace",
@@ -556,7 +557,7 @@ def auto_context(question: str, db_path: str = DEFAULT_DB) -> str:
             if not prof_m:
                 # Rank the requested service role first so LIMIT 18 can't drop it (e.g. Innkeeper Farley in Goldshire).
                 for pat, role in ((r"\binn(?:keeper)?\b", "Innkeeper"), (r"\b(?:flight|gryphon|wyvern|hippogryph)\b", "Flight Master"),
-                                  (r"\b(?:arrows?|bullets?|ammo|bowyer)\b", "Bowyer"), (r"\brepair\b", "Repair"), (r"\bstable\b", "Stable")):
+                                  (r"\b(?:arrows?|bullets?|ammo|bowyer)\b", "Bowyer"), (r"\b(?:repair|vendor|merchant|armorer|weaponsmith|smith)\b", "Repair"), (r"\bstable\b", "Stable")):
                     if re.search(pat, q_lower):
                         prof_stem = role
                         break
@@ -596,13 +597,14 @@ def auto_context(question: str, db_path: str = DEFAULT_DB) -> str:
                 svc_zones = [matched_zone]
             # Default to Alliance-friendly NPCs unless the speaker explicitly asks for Horde (without Alliance).
             ask_horde = bool(re.search(r"\bhorde\b", q_lower)) and not bool(re.search(r"\balliance\b", q_lower))
+            ask_night = bool(re.search(r"\b(night|nighttime|after\s+dark|worgen)\b", q_lower))
             excl_faction = "A" if ask_horde else "H"
-            pref_faction = "H" if ask_horde else "A"
+            pref_faction = "H" if ask_horde else ("AH" if ask_night else "A")
             z_placeholders = ",".join("?" for _ in svc_zones)
             z_order_case = " ".join(f"WHEN zone = ? THEN {i}" for i, _ in enumerate(svc_zones))
             npc_rows = conn.execute(
                 f"""
-                SELECT summary, subname, coords, zone, faction FROM npcs
+                SELECT name, summary, subname, coords, zone, faction FROM npcs
                 WHERE zone IN ({z_placeholders}) AND faction != ? AND coords NOT LIKE '%(0.0, 0.0)%' AND name NOT LIKE 'World %'
                   AND (
                     subname LIKE '%Bowyer%' OR subname LIKE '%Gun%' OR subname LIKE '%Ammo%'
@@ -632,11 +634,24 @@ def auto_context(question: str, db_path: str = DEFAULT_DB) -> str:
                 npc_rows = sorted(npc_rows, key=_hub_sort_key)
             for r in npc_rows[:10]:
                 s = r["summary"]
+                if r["name"].startswith("Pyrewood "):
+                    s += " [WARNING: Pyrewood Village humans transform into hostile Worgen at 9:00 PM server time; at night use neutral Wallace the Blind at Silverpine Forest (46.5, 86.5) by the Greymane Wall instead]"
+                elif r["name"] == "Wallace the Blind":
+                    s += " [Always Neutral 24/7 (day & night) — stands by a cart on the main road just north of the Greymane Wall gate in southern Silverpine Forest, ~19 map units south of Shadowfang Keep / Pyrewood Village]"
                 if matched_hub and TOWN_HUB_COORDS[matched_hub][0] == matched_zone:
                     _, hx, hy, _ = TOWN_HUB_COORDS[matched_hub]
                     s = annotate_hub_direction(s, matched_hub.title(), matched_zone, hx, hy)
                 if s not in lines:
                     lines.append(s)
+        # If the user is asking about a specific named entity (not a generic "what quests are in Zone"), put FTS entity matches BEFORE generic zone quests so top-6/top-9 truncation never drops the named NPC/quest/item!
+        is_broad_zone_q = bool(re.search(r"\b(what\s+quests?|which\s+quests?|any\s+quests?|bosses\s+and\s+quests|quests\s+in)\b", q_lower))
+        fts_rows = query_fts(conn, remainder, limit=6)
+        if not is_broad_zone_q:
+            for r in fts_rows:
+                if "Wallace the Blind <Weaponsmith" in r and "[Always Neutral" not in r:
+                    r += " [Always Neutral 24/7 (day & night) — stands by a cart on the main road just north of the Greymane Wall gate in southern Silverpine Forest, ~19 map units south of Shadowfang Keep / Pyrewood Village]"
+                if r not in lines:
+                    lines.append(r)
         primary_limit = 10 if len(matched_zones) > 1 else 12
         z_rows = query_zone_quests(conn, matched_zone, level=level, limit=primary_limit)
         for r in z_rows:
@@ -647,12 +662,18 @@ def auto_context(question: str, db_path: str = DEFAULT_DB) -> str:
             for r in query_zone_quests(conn, matched_zones[1], level=sec_lvl, limit=4):
                 if r not in lines:
                     lines.append(r)
-
-    # Also check specific entity keywords (removing the matched zone name and level numbers)
-    fts_rows = query_fts(conn, remainder, limit=6)
-    for r in fts_rows:
-        if r not in lines:
-            lines.append(r)
+        if is_broad_zone_q:
+            for r in fts_rows:
+                if r not in lines:
+                    lines.append(r)
+    else:
+        # No matched zone: check specific entity keywords directly
+        fts_rows = query_fts(conn, remainder, limit=6)
+        for r in fts_rows:
+            if "Wallace the Blind <Weaponsmith" in r and "[Always Neutral" not in r:
+                r += " [Always Neutral 24/7 (day & night) — stands by a cart on the main road just north of the Greymane Wall gate in southern Silverpine Forest, ~19 map units south of Shadowfang Keep / Pyrewood Village]"
+            if r not in lines:
+                lines.append(r)
 
     conn.close()
     if not lines:
@@ -688,9 +709,12 @@ def self_check():
     assert "Lore (Murloc):" in ml and "gorlocs" in ml.lower(), f"Failed Murloc lore check: {ml}"
     dr = auto_context("How do I get Cat Form as a Druid in WoW Forever?")
     assert "Class Quest Spells: Druid" in dr and "#98397" in dr, f"Failed Druid Class Quest Spells check: {dr}"
-    # 5. Verify Alliance faction & cross-zone route filtering on Undercity -> Shadowfang Keep repair lookup
+    # 5. Verify Alliance faction, nighttime Worgen priority, and cross-zone route filtering on Undercity -> Shadowfang Keep repair lookups
     uc_sfk = auto_context("Hey, Alfred, I'm running from Undercity to Shadow Fang Keep as Alliance. Where is the nearest place I can repair my gear?")
     assert "Pyrewood Armorer" in uc_sfk and "Wallace the Blind" in uc_sfk and "Lauren Newcomb" not in uc_sfk, f"Failed UC->SFK Alliance repair check: {uc_sfk}"
+    sfk_night = auto_context("Hey, Alfred, who is the vendor near Shadowfang Keep for Alliance at night, though?")
+    first_npc = next((l for l in sfk_night.splitlines() if l.startswith("- NPC:")), "")
+    assert first_npc.startswith("- NPC: Wallace the Blind") and "Always Neutral 24/7" in sfk_night, f"Failed SFK night vendor check: {sfk_night}"
     conn.close()
     print("SELF-CHECK PASSED!")
     print("\n--- Sample Auto-Context Output for 'Westfall at level 10' ---")

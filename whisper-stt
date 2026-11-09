@@ -29,7 +29,8 @@ BARE_INTERRUPT = re.compile(
     re.I,
 )
 NON_QUESTION = re.compile(
-    rf"^\s*(?:we'?re\s+|i'?m\s+|still\s+)?(?:waiting on you|thank you|thanks|good job|good answer|nice job|well done|shut up|never\s*mind)[\s,!.?]*{WAKE_PAT}[\s,!.?]*$",
+    rf"^\s*(?:we'?re\s+|i'?m\s+|still\s+)?(?:waiting on you|thank you|thanks|good job|good answer|nice job|well done|shut up|never\s*mind)[\s,!.?]*{WAKE_PAT}[\s,!.?]*$"
+    rf"|.*\bhold\s+on\b[^?]*[\s,!.?]+(?:hey[\s,]+)?{WAKE_PAT}[\s,!.?]*$",
     re.I,
 )
 THIRD_PERSON = re.compile(
@@ -142,7 +143,7 @@ CASUAL_BANTER_PAT = re.compile(
     re.I,
 )
 WOW_SIGNAL_PAT = re.compile(
-    r"\b(quest|quests|turn[\s\-]+in|drop|drops|drop\s+rate|vendor|repair|trainer|train|flight\s+master|gryphon|wyvern|hippogryph|innkeeper|inn|xp|level|lvl|mob|mobs|boss|bosses|rare|spawn|spawns|aggro|pull|wipe|loot|bis|dps|tank|heal|healer|mana|spell|spells|talent|talents|rank|cooldown|reagent|buff|debuff|bag|bags|bank|hearthstone|mount|guild|raids?|dungeons?|instances?|graveyard|corpse|respawn|node|vein|herb|herbalism|fish|fishing|skinning|mining|blacksmith\w*|alchem\w*|leatherwork\w*|tailor\w*|enchant\w*|cook\w*|first\s+aid|camp|camping|turtle|forever|classic|azeroth|kalimdor|alliance|horde|paladin|warrior|hunter|rogue|priest|mage|warlock|druid|shaman|murloc\w*|gnoll\w*|defias|kobold\w*|sylvanas|thrall|arthas|azshara|cenarius|furlbrow\w*|gnomeregan|deadmines|wailing\s+caverns|shadowfang|sfk|blackfathom|stockade|razorfen|scarlet\s+monastery|uldaman|zul'?farrak|maraudon|sunken\s+temple|blackrock|scholomance|stratholme|molten\s+core|onyxia|bwl|naxx\w*|halls?\s+of\s+th(?:ane|ain)s?|thane\w*|lordaeron|excavation\s+site|dalaran|drowned\s+city|krol'?dok|alcaz|blackmaw|shaper'?s\s+terrace|riverglades|farholde|way|coords|coordinates)\b",
+    r"\b(quest|quests|turn[\s\-]+in|drop|drops|drop\s+rate|vendor|repair|trainer|train|flight\s+master|gryphon|wyvern|hippogryph|innkeeper|inn|xp|level|lvl|mob|mobs|boss|bosses|rare|spawn|spawns|aggro|pull|wipe|attack|hostile|friendly|neutral|nuke|worgen|night|daytime|directions?|plain\s+english|add-?on|waypoint|wallace|pyrewood|greymane|loot|bis|dps|tank|heal|healer|mana|spell|spells|talent|talents|rank|cooldown|reagent|buff|debuff|bag|bags|bank|hearthstone|mount|guild|raids?|dungeons?|instances?|graveyard|corpse|respawn|node|vein|herb|herbalism|fish|fishing|skinning|mining|blacksmith\w*|alchem\w*|leatherwork\w*|tailor\w*|enchant\w*|cook\w*|first\s+aid|camp|camping|turtle|forever|classic|azeroth|kalimdor|alliance|horde|paladin|warrior|hunter|rogue|priest|mage|warlock|druid|shaman|murloc\w*|gnoll\w*|defias|kobold\w*|sylvanas|thrall|arthas|azshara|cenarius|furlbrow\w*|gnomeregan|deadmines|wailing\s+caverns|shadowfang|sfk|blackfathom|stockade|razorfen|scarlet\s+monastery|uldaman|zul'?farrak|maraudon|sunken\s+temple|blackrock|scholomance|stratholme|molten\s+core|onyxia|bwl|naxx\w*|halls?\s+of\s+th(?:ane|ain)s?|thane\w*|lordaeron|excavation\s+site|dalaran|drowned\s+city|krol'?dok|alcaz|blackmaw|shaper'?s\s+terrace|riverglades|farholde|way|coords|coordinates|location)\b",
     re.I,
 )
 
@@ -152,9 +153,9 @@ def is_casual_or_random(text: str, ctx: str, db_rows: int) -> bool:
     stripped = re.sub(rf"^\s*(?:hey[\s,]+)?{WAKE_PAT}[\s,!.?]*", "", text, flags=re.I).strip()
     if CASUAL_BANTER_PAT.search(stripped):
         return True
-    if WOW_SIGNAL_PAT.search(stripped) or "- Landmark (" in ctx:
+    if "[Follow-up to previous question:" in text or WOW_SIGNAL_PAT.search(stripped) or "- Landmark (" in ctx:
         return False
-    # Check if any known WoW zone or town is in the query, or if 2+ distinct query words match a single WoW entity
+    # Check if any known WoW zone or town is in the query, or if 1+ distinct proper-noun query words match a top retrieved WoW NPC/Quest/Item
     try:
         import wow_db
         q_low = stripped.lower()
@@ -164,9 +165,11 @@ def is_casual_or_random(text: str, ctx: str, db_rows: int) -> bool:
         pass
     if len(stripped.split()) <= 2:
         return True
-    q_stems = {w[:5] for w in re.findall(r"[a-z0-9]+", stripped.lower()) if len(w) >= 4 and w not in {"what", "where", "when", "which", "there", "about", "tell", "little", "have", "this", "that", "with", "from", "your", "should", "would", "could", "long"}}
-    for line in ctx.splitlines()[1:4]:
+    q_stems = {w[:5] for w in re.findall(r"[a-z0-9]+", stripped.lower()) if len(w) >= 4 and w not in {"what", "where", "when", "which", "there", "about", "tell", "little", "have", "this", "that", "with", "from", "your", "should", "would", "could", "long", "friend", "does", "give", "plain", "english"}}
+    for line in ctx.splitlines()[1:5]:
         head = line.split("|")[0].lower()
+        if sum(1 for s in q_stems if s in head) >= 1 and not line.startswith("- Lore ("):
+            return False
         if sum(1 for s in q_stems if s in head) >= 2:
             return False
     return True
@@ -224,12 +227,12 @@ PUSHBACK_OR_BETA_PAT = re.compile(
 def is_simple_wow_lookup(text: str, ctx: str, db_rows: int) -> bool:
     """Route to the local model for narrow "where is / who sells / what drops" lookups that ATLAS D(x) scores below 0.75.
     alfred-v1 (Gemma 4 7.5B) scored 10/10 on narrow lookups vs Gemma 4 E2B 6/10 (2026-11-08 bench).
-    "what level" / "what do I do with" / "how do I", cross-zone travel ("from X to Y"), follow-up corrections, or pushback/beta queries stay on Gemini."""
+    "what level" / "what do I do with" / "how do I", cross-zone travel ("from X to Y"), night/daytime mechanics, directions, follow-up corrections, or pushback/beta queries stay on Gemini."""
     return (
         bool(NARROW_LOOKUP_PAT.search(text))
         and not PUSHBACK_OR_BETA_PAT.search(text)
         and "[Follow-up to previous question:" not in text
-        and not re.search(r"\b(what\s+level|what\s+do\s+i\s+do\s+with|how\s+do\s+(?:i|we)|where\s+does\s+.*?\s+spawn|running\s+from|from\s+\w+(?:\s+\w+)?\s+to\s+\w+|between\s+\w+(?:\s+\w+)?\s+and\s+\w+)\b", text, re.I)
+        and not re.search(r"\b(what\s+level|what\s+do\s+i\s+do\s+with|how\s+do\s+(?:i|we)|where\s+does\s+.*?\s+spawn|running\s+from|from\s+\w+(?:\s+\w+)?\s+to\s+\w+|between\s+\w+(?:\s+\w+)?\s+and\s+\w+|at\s+night|nighttime|worgen|directions?|plain\s+english|without\s+coords|without\s+coordinates)\b", text, re.I)
         and estimate_difficulty(text, ctx, db_rows) < 0.75
     )
 
@@ -290,7 +293,7 @@ def handle_feature_request(text: str) -> tuple[str, str, int]:
 def call_local_fast_butler(question: str, ctx: str, timeout: float = 9.0) -> tuple[str | None, int]:
     """Call the warm local model (alfred-v1) on Sheldon RTX 2080 (:11434) with Verify-Then-Escalate guards."""
     t0 = time.perf_counter()
-    is_lore_q = bool(re.search(r"\b(lore|history|story|who\s+is|tell\s+(?:me|us)\s+(?:a\s+little\s+bit\s+)?about)\b", question, re.I))
+    is_lore_q = bool(re.search(r"\b(lore|history|story|origin|origins|background|describe|explain|tell\s+(?:me|us)\s+(?:a\s+little\s+bit\s+)?about)\b", question, re.I)) and not bool(re.search(r"\b(where|closest|nearest|repair|vendor|buy|sell|trainer|train|coords|coordinates|location)\b", question, re.I))
     raw_rows = ctx.splitlines()[1:]
     filtered = [r[:340] for r in raw_rows if is_lore_q or not r.startswith("- Lore (")]
     if not filtered:
@@ -541,9 +544,9 @@ def main():
             sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
             import wow_db
             text = wow_db.normalize_stt(strip_pre_wake(text))
-            # If this is a short follow-up/correction (<9 words, e.g. "Alfred, I'm Alliance" or "Can you double check that?"), attach the previous woke turn for context.
-            stripped_q = re.sub(rf"^\s*(?:hey[\s,]+)?{WAKE_PAT}[\s,!.?]*", "", text, flags=re.I).strip()
-            if len(stripped_q.split()) <= 8 and os.path.exists(LOG_PATH) and not CASUAL_BANTER_PAT.search(stripped_q):
+            # If this is a short follow-up/correction (<=12 words, e.g. "Alfred, I'm Alliance" or "No, hey Alfred, isn't that guy gonna attack us at night?"), attach the previous woke turn for context.
+            stripped_q = re.sub(rf"^\s*(?:(?:no|wait|hold\s+on|actually)[\s,]+)*(?:hey[\s,]+)?{WAKE_PAT}[\s,!.?]*", "", text, flags=re.I).strip()
+            if len(stripped_q.split()) <= 12 and os.path.exists(LOG_PATH) and not CASUAL_BANTER_PAT.search(stripped_q):
                 try:
                     rlines = [json.loads(l) for l in open(LOG_PATH).read().splitlines()[-12:] if l.strip()]
                     prev_q, prev_a = "", ""
@@ -553,7 +556,7 @@ def main():
                         elif r.get("kind") == "stt" and r.get("woke"):
                             prev_q = r.get("text") or ""
                             break
-                    if prev_q and (PUSHBACK_OR_BETA_PAT.search(stripped_q) or re.search(r"\b(alliance|horde|level|lvl|Wait|no|actually|meant|what\s+about)\b", stripped_q, re.I)):
+                    if prev_q and (PUSHBACK_OR_BETA_PAT.search(stripped_q) or re.search(r"\b(alliance|horde|level|lvl|wait|no|actually|meant|what\s+about|that\s+guy|he\s+gonna|isn'?t\s+(?:he|that|it)|at\s+night|hostile|attack)\b", text, re.I)):
                         text = f"{text} [Follow-up to previous question: \"{prev_q}\" where you answered: \"{prev_a}\"]"
                 except Exception:
                     pass

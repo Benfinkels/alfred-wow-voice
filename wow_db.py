@@ -355,6 +355,17 @@ STT_ALIASES = {
     r"\b(?:shadow\s*fang(?:\s+keep)?|shadow\s*fan\s*keep|sfk)\b": "Shadowfang Keep",
     r"\bsil(?:ver)?\s*pine(?:\s+forest)?\b": "Silverpine Forest",
     r"\bver(?:i?gan'?s?|gan'?s?)\s+fist\b": "Verigan's Fist",
+    r"\bsouth\s+shore\b": "Southshore",
+    r"\bhills\s*brad(?:\s*foot\s*hills?)?\b": "Hillsbrad Foothills",
+    r"\btarren\s*mill\b": "Tarren Mill",
+    r"\bmenethil(?:\s+harbor)?\b": "Menethil",
+    r"\bdark\s+shire\b": "Darkshire",
+    r"\blake\s+shire\b": "Lakeshire",
+    r"\bgold\s+shire\b": "Goldshire",
+    r"\bmoon\s+brook\b": "Moonbrook",
+    r"\bbooty\s+bay\b": "Booty Bay",
+    r"\bd[\s\-]*cur[cs]e\b": "Decurse",
+    r"\bde[\s\-]+curse\b": "Decurse",
     r"\bexcavation\s+site(?:\s*:?\s*wetlands)?\b": "Excavation Site: Wetlands",
     r"\bkrol'?dok(?:\s+stronghold)?\b": "Krol'dok Stronghold",
     r"\bshaper'?s?\s+terrace\b": "Shaper's Terrace",
@@ -781,6 +792,10 @@ def self_check():
     # 6. Verify quest chain root expansion for Verigan's Fist -> The Tome of Valor (Duthorian Rall & Tiza Battleforge)
     vf = auto_context("Hey, Alfred, for that quest for Vergan's fist, what is the first quest I need to pick up to get it, and where do I grab it from?")
     assert "The Tome of Valor" in vf and "Duthorian Rall" in vf and "Tiza Battleforge" in vf, f"Failed Verigan's Fist chain check: {vf}"
+    # 7. Verify compound-town & spell STT aliases
+    ss = auto_context("Hey Alfred, where is the coordinates for South Shore Hills Bradfoothills?")
+    assert "Landmark (Southshore): Located in Hillsbrad Foothills at (51.1, 58.9)" in ss, f"Failed Southshore check: {ss}"
+    assert "Decurse" in normalize_stt("putting my D-Curce on my bars"), "Failed Decurse alias check"
     conn.close()
     print("SELF-CHECK PASSED!")
     print("\n--- Sample Auto-Context Output for 'Westfall at level 10' ---")

@@ -1,0 +1,14 @@
+[Unit]
+Description=AlfredBridge WoW Forever Telemetry & Waypoint/Spoken Sync Daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 %h/bin/sheldon_bridge_daemon.py
+Restart=always
+RestartSec=2
+Environment=ALFRED_BRIDGE_HOST=0.0.0.0
+Environment=ALFRED_BRIDGE_PORT=8098
+
+[Install]
+WantedBy=default.target

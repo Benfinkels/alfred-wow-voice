@@ -1,10 +1,11 @@
 [Unit]
-Description=Kokoro-82M ONNX TTS daemon for OpenClaw Discord Voice
+Description=Kokoro-82M ONNX TTS daemon (GTX 1080 CUDA) for OpenClaw Discord Voice
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=%h/.openclaw/venv/bin/python3 %h/bin/kokoro_daemon.py
+Environment=CUDA_VISIBLE_DEVICES=1
+ExecStart=/bin/bash -c 'export LD_LIBRARY_PATH=$(echo %h/.openclaw/venv/lib/python*/site-packages/nvidia/*/lib | tr " " ":"); exec %h/.openclaw/venv/bin/python3 %h/bin/kokoro_daemon.py'
 Restart=always
 RestartSec=2
 

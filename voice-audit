@@ -7,6 +7,8 @@ CORRECTIONS_LOG = os.environ.get("VOICE_CORRECTIONS_LOG", os.path.expanduser("~/
 FEATURE_LOG = os.environ.get("VOICE_FEATURE_LOG", os.path.expanduser("~/.openclaw/logs/feature-requests.jsonl"))
 
 ARM_LABELS = {
+    "PARTY_BOARD":         "Party Blackboard ($0)",
+    "FEATURE_REQUEST":     "Voice Feature Ticket ($0)",
     "LOCAL_SIMPLE_GEMMA4": "alfred-v1 local (Local WoW, $0)",
     "LOCAL_BANTER_GEMMA4": "alfred-v1 local (Local Banter, $0)",
     "A_LOCAL_GEMMA4":      "alfred-v1 local (Local A/B, $0)",
@@ -85,7 +87,8 @@ for r in lines[-n:]:
         icon = "\u23f9" if r.get("interrupt") else ("\u2714" if r.get("woke") else "\u00b7")
         arm_tag = f" [{r['arm']}" + (f" {r['local_ms']}ms]" if r.get("local_ms") else "]") if r.get("arm") else ""
         db_tag = (f" [+{r['db_rows']} DB]" if r.get("db_rows") else (" [INTERRUPT]" if r.get("interrupt") else "")) + arm_tag
-        print(f"{r['ts']}  HEARD {icon} ({r.get('ms')}ms){db_tag}: {r['text']}")
+        spk_tag = f" [{r['speaker']}]" if r.get("speaker") else ""
+        print(f"{r['ts']}  HEARD {icon}{spk_tag} ({r.get('ms')}ms){db_tag}: {r['text']}")
     else:
         ctag = " [CORRECTION LOGGED]" if r.get("corrected") else ""
         print(f"{r['ts']}  SPOKE{ctag}: {r['spoken']}")

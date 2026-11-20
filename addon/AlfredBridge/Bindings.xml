@@ -1,0 +1,14 @@
+<Bindings>
+    <Binding name="ALFREDBRIDGE_LOAD_PIN" header="ALFREDBRIDGE" runOnUp="false">
+        AlfredBridge_OnLoadPin()
+    </Binding>
+    <Binding name="ALFREDBRIDGE_DUCK_ON" runOnUp="false">
+        AlfredBridge_OnDuck()
+    </Binding>
+    <Binding name="ALFREDBRIDGE_DUCK_OFF" runOnUp="false">
+        AlfredBridge_OnUnduck()
+    </Binding>
+    <Binding name="ALFREDBRIDGE_COPY_STATE" runOnUp="false">
+        AlfredBridge_OnCopyState()
+    </Binding>
+</Bindings>

@@ -9,3 +9,12 @@
 *.orig
 .env
 __pycache__/
+*.gguf
+*.safetensors
+dist/
+*.zip
+party_state.json
+bin/
+obj/
+.vs/
+TestResults/

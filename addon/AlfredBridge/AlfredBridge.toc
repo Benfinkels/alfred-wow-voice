@@ -1,0 +1,11 @@
+## Interface: 16001
+## Title: AlfredBridge
+## Notes: Live WoW Forever telemetry, WaypointUI 3D arrows, and Spoken audio pause/resume for Alfred Discord Voice
+## Author: Ben
+## Version: 1.0.0
+## SavedVariables: AlfredBridgeDB
+## OptionalDeps: WaypointUI, Spoken
+## Group: AlfredBridge
+## X-Part-Of: AlfredBridge
+
+AlfredBridge.lua

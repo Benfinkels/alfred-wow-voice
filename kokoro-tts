@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Kokoro-82M TTS CLI for OpenClaw: sanitizes text for speech, logs self-corrections, calls warm daemon, and posts copyable /way waypoints to #bot-commands."""
+"""Kokoro-82M TTS CLI for OpenClaw: sanitizes text for speech, logs self-corrections, calls warm daemon, posts copyable /way waypoints to #bot-commands, and notifies AlfredBridge."""
 import argparse, json, os, re, socket, sys, time, urllib.request
 
 SOCKET_PATH = os.environ.get("KOKORO_SOCK", "/tmp/kokoro_tts.sock")
@@ -8,7 +8,23 @@ MODEL_PATH = os.path.join(KOKORO_DIR, "kokoro-v1.0.onnx")
 VOICES_PATH = os.path.join(KOKORO_DIR, "voices-v1.0.bin")
 AUDIT_LOG = os.environ.get("VOICE_AUDIT_LOG", os.path.expanduser("~/.openclaw/logs/voice-audit.jsonl"))
 CORRECTIONS_LOG = os.environ.get("VOICE_CORRECTIONS_LOG", os.path.expanduser("~/.openclaw/logs/corrections.jsonl"))
-BOT_COMMANDS_CHANNEL_ID = os.environ.get("WOW_TEXT_CHANNEL_ID", "")  # Set to your Discord #bot-commands channel ID
+
+
+def _get_env_var(name: str, default: str = "") -> str:
+    val = os.environ.get(name, "").strip()
+    if val:
+        return val
+    for p in (os.path.expanduser("~/.env"), os.path.expanduser("~/.openclaw/.env")):
+        if os.path.exists(p):
+            m = re.search(rf"^{re.escape(name)}\s*=\s*['\"]?([^'\"\r\n#]+)", open(p, encoding="utf-8", errors="ignore").read(), re.M)
+            if m:
+                return m.group(1).strip()
+    return default
+
+
+BOT_COMMANDS_CHANNEL_ID = _get_env_var("WOW_TEXT_CHANNEL_ID")  # Set WOW_TEXT_CHANNEL_ID in ~/.env for #bot-commands
+ALFRED_BRIDGE_NOTIFY_URL = os.environ.get("ALFRED_BRIDGE_NOTIFY_URL", "http://127.0.0.1:8098/tts-event")
+ALFRED_BRIDGE_TOKEN = _get_env_var("ALFRED_BRIDGE_TOKEN")
 OPENCLAW_CFG_PATH = os.path.expanduser("~/.openclaw/openclaw.json")
 
 SELF_CORR_RE = re.compile(
@@ -19,6 +35,22 @@ USER_CORR_RE = re.compile(
     r"\b(not correct|that'?s wrong|you'?re wrong|incorrect|actually it'?s|no[,\s]+it'?s)\b",
     re.I,
 )
+
+FOREVER_ZONE_UIMAP_IDS = {
+    "Alterac Mountains": 1416, "Alterac Valley": 1459, "Arathi Basin": 1461, "Arathi Highlands": 1417,
+    "Ashenvale": 1440, "Azshara": 1447, "Badlands": 1418, "Blasted Lands": 1419, "Burning Steppes": 1428,
+    "Darkshore": 1439, "Darkspear Islands": 2524, "Darnassus": 1457, "Deadwind Pass": 1430, "Desolace": 1443,
+    "Dun Morogh": 1426, "Durotar": 1411, "Duskwood": 1431, "Dustwallow Marsh": 1445, "Eastern Plaguelands": 1423,
+    "Elwynn Forest": 1429, "Felwood": 1448, "Feralas": 1444, "Hillsbrad Foothills": 1424, "Ironforge": 1455,
+    "Loch Modan": 1432, "Moonglade": 1450, "Mount Hyjal": 2482, "Mulgore": 1412, "Orgrimmar": 1454,
+    "Redridge Mountains": 1433, "Riverglades": 2548, "Searing Gorge": 1427, "Shen'dralas": 2652, "Silithus": 1451,
+    "Silverpine Forest": 1421, "Stonetalon Mountains": 1442, "Stormwind City": 1453, "Stranglethorn Vale": 1434,
+    "Swamp of Sorrows": 1435, "Tanaris": 1446, "Teldrassil": 1438, "The Barrens": 1413, "The Hinterlands": 1425,
+    "Thousand Needles": 1441, "Thunder Bluff": 1456, "Tirisfal Glades": 1420, "Un'Goro Crater": 1449,
+    "Undercity": 1458, "Warsong Gulch": 1460, "Western Plaguelands": 1422, "Westfall": 1436, "Wetlands": 1437,
+    "Winterspring": 1452, "Zephras Isle": 2521,
+}
+FOREVER_ZONE_LOWER = {k.lower(): (k, v) for k, v in FOREVER_ZONE_UIMAP_IDS.items()}
 
 
 def run_socket_client(text: str, output: str, voice: str, speed: float) -> bool:
@@ -50,16 +82,28 @@ def run_in_process(text: str, output: str, voice: str, speed: float):
     sf.write(output, samples, sr)
 
 
-def extract_waypoints(question: str, raw_reply: str) -> list[tuple[str, str]]:
-    """Extract (label, '/way X, Y') pairs ONLY for coordinates actually spoken in raw_reply (using wow_db only for clean labels)."""
-    waypoints: list[tuple[str, str]] = []
+def extract_waypoint_pins(question: str, raw_reply: str) -> list[dict]:
+    """Extract structured waypoint dicts ONLY for coordinates actually spoken in raw_reply."""
+    pins: list[dict] = []
     seen_coords: set[str] = set()
-    coord_labels: dict[str, str] = {}
+    coord_meta: dict[str, tuple[str, str]] = {}
+    fallback_zone = ""
+
+    combined_low = f"{raw_reply or ''} {question or ''}".lower()
+    for z_low in sorted(FOREVER_ZONE_LOWER, key=len, reverse=True):
+        if z_low in combined_low:
+            fallback_zone = FOREVER_ZONE_LOWER[z_low][0]
+            break
 
     if question:
         try:
             sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
             import wow_db
+            if not fallback_zone:
+                for t_low, z_name in wow_db.TOWN_TO_ZONE.items():
+                    if t_low in combined_low:
+                        fallback_zone = z_name
+                        break
             ctx = wow_db.auto_context(wow_db.normalize_stt(question))
             for line in ctx.splitlines()[1:]:
                 if line.startswith("- Lore (") or line.startswith("- Landmark ("):
@@ -67,10 +111,10 @@ def extract_waypoints(question: str, raw_reply: str) -> list[tuple[str, str]]:
                 head = re.sub(r"\s*\(#\d+\)", "", line.split("|")[0].replace("- ", "").strip())
                 for cm in re.finditer(r"([A-Za-z'\- ]+?)\s*\(([A-Za-z'\- ]+?)\s*\((\d{1,2}\.\d),\s*(\d{1,2}\.\d)\)\)", line):
                     entity, zone, x, y = cm.group(1).strip(), cm.group(2).strip(), cm.group(3), cm.group(4)
-                    coord_labels.setdefault(f"{x}, {y}", f"{head} \u2014 {entity} ({zone})")
+                    coord_meta.setdefault(f"{x}, {y}", (f"{head} \u2014 {entity} ({zone})", zone))
                 for cm in re.finditer(r"\|\s*([A-Za-z'\- ]+?)\s*\((\d{1,2}\.\d),\s*(\d{1,2}\.\d)\)", line):
                     zone, x, y = cm.group(1).strip(), cm.group(2), cm.group(3)
-                    coord_labels.setdefault(f"{x}, {y}", f"{head} ({zone})")
+                    coord_meta.setdefault(f"{x}, {y}", (f"{head} ({zone})", zone))
         except Exception:
             pass
 
@@ -82,17 +126,61 @@ def extract_waypoints(question: str, raw_reply: str) -> list[tuple[str, str]]:
         key = f"{x}, {y}"
         if key not in seen_coords and key != "0.0, 0.0":
             seen_coords.add(key)
-            if key in coord_labels:
-                label = coord_labels[key]
+            if key in coord_meta:
+                label, zone = coord_meta[key]
             else:
-                prefix = norm_reply[max(0, m.start() - 60):m.start()].strip(" ,(-\u2014:")
-                label = (prefix.split(".")[-1].strip() or "Spoken Waypoint")[-50:]
-            waypoints.append((label, f"/way {x}, {y}"))
+                clause = norm_reply[:m.start()].split(".")[-1].strip(" ,(-\u2014:")
+                clause = re.sub(r"^(?:sir[,\s]+|well[,\s]+|you\s+can\s+(?:find|see)\s+)", "", clause, flags=re.I)
+                subj = re.split(
+                    r"\s+(?:is\s+(?:standing|located|found|right|over|inside|outside|in|at|near)|sits\s+(?:in|at|around|near)|stands\s+(?:in|at|near)|at|in\s+[A-Z])\b",
+                    clause,
+                    maxsplit=1,
+                )[0].strip(" ,(-\u2014:")
+                label = (subj if 2 <= len(subj) <= 45 else clause[-45:].lstrip()) or "Alfred Waypoint"
+                zone = fallback_zone
+            map_id = FOREVER_ZONE_LOWER.get((zone or "").lower(), ("", 0))[1]
+            way_cmd = f"/way {zone} {x} {y} {label}" if zone else f"/way {x}, {y}"
+            pins.append({
+                "label": label,
+                "zone": zone,
+                "mapID": map_id,
+                "x": float(x),
+                "y": float(y),
+                "way_cmd": f"/way {x}, {y}",
+                "tomtom_cmd": way_cmd,
+            })
+    return pins[:5]
 
-    return waypoints[:5]
+
+def extract_waypoints(question: str, raw_reply: str) -> list[tuple[str, str]]:
+    """Extract (label, '/way X, Y') pairs ONLY for coordinates actually spoken in raw_reply (using wow_db only for clean labels)."""
+    return [(p["label"], p["way_cmd"]) for p in extract_waypoint_pins(question, raw_reply)]
 
 
-def post_voice_companion_to_discord(question: str, raw_reply: str, arm: str | None = None, feature_summary: str | None = None):
+def notify_alfred_bridge(question: str, raw_reply: str, wav_path: str):
+    """Non-blocking notification to local sheldon_bridge_daemon (:8098) for Spoken pause & WaypointUI 3D arrows."""
+    if not ALFRED_BRIDGE_NOTIFY_URL:
+        return
+    try:
+        dur_s = 4.0
+        if wav_path and os.path.exists(wav_path):
+            dur_s = max(1.5, (max(0, os.path.getsize(wav_path) - 44) / 48000.0) + 0.8)
+        pins = extract_waypoint_pins(question, raw_reply)
+        headers = {"Content-Type": "application/json"}
+        if ALFRED_BRIDGE_TOKEN:
+            headers["Authorization"] = f"Bearer {ALFRED_BRIDGE_TOKEN}"
+        req = urllib.request.Request(
+            ALFRED_BRIDGE_NOTIFY_URL,
+            data=json.dumps({"speaking": True, "duration_s": round(dur_s, 2), "waypoints": pins}).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=0.25).read()
+    except Exception:
+        pass
+
+
+def post_voice_companion_to_discord(question: str, raw_reply: str, arm: str | None = None, feature_summary: str | None = None, speaker: str | None = None):
     """Post the spoken reply + 1-click copyable `/way X, Y` code blocks to Ardent #bot-commands."""
     if not BOT_COMMANDS_CHANNEL_ID or not raw_reply:
         return
@@ -102,6 +190,7 @@ def post_voice_companion_to_discord(question: str, raw_reply: str, arm: str | No
             return
         clean_q = re.sub(r"\s+", " ", (question or "").splitlines()[0]).strip()
         clean_a = re.sub(r"(\d{1,2})\s+point\s+(\d)", r"\1.\2", raw_reply, flags=re.I).strip()
+        q_label = speaker.strip() if speaker and speaker.strip() else "Q"
 
         parts = []
         if arm == "FEATURE_REQUEST":
@@ -109,12 +198,12 @@ def post_voice_companion_to_discord(question: str, raw_reply: str, arm: str | No
             if feature_summary:
                 parts.append(f"\U0001f4cb **Summary:** `{feature_summary}`")
             if clean_q:
-                parts.append(f"\U0001f399\ufe0f **Voice Transcript:** *{clean_q}*")
+                parts.append(f"\U0001f399\ufe0f **{q_label if q_label != 'Q' else 'Voice Transcript'}:** *{clean_q}*")
             parts.append(f"\U0001f3a9 **Alfred:** {clean_a}")
         else:
             waypoints = extract_waypoints(clean_q, raw_reply)
             if clean_q:
-                parts.append(f"\U0001f399\ufe0f **Q:** *{clean_q}*")
+                parts.append(f"\U0001f399\ufe0f **{q_label}:** *{clean_q}*")
             parts.append(f"\U0001f3a9 **Alfred:** {clean_a}")
             if waypoints:
                 parts.append("**\U0001f4cd Waypoints (click top-right of code box to copy for WoW):**")
@@ -137,14 +226,15 @@ def post_voice_companion_to_discord(question: str, raw_reply: str, arm: str | No
         pass
 
 
-def audit(**rec):
+def audit(**rec) -> str:
+    last_stt = ""
     try:
         os.makedirs(os.path.dirname(AUDIT_LOG), exist_ok=True)
         ts = time.strftime("%Y-%m-%dT%H:%M:%S")
         raw_txt = rec.get("raw", "")
-        last_stt = ""
         last_arm = None
         last_feat = None
+        last_speaker = None
         if os.path.exists(AUDIT_LOG):
             recent = [json.loads(l) for l in open(AUDIT_LOG).read().splitlines()[-25:] if l.strip()]
             woke_stts = [r for r in recent if r.get("kind") == "stt" and r.get("woke")]
@@ -152,6 +242,7 @@ def audit(**rec):
             last_stt = woke_stts[-1]["text"] if woke_stts else ""
             last_arm = woke_stts[-1].get("arm") if woke_stts else None
             last_feat = woke_stts[-1].get("feature_summary") if woke_stts else None
+            last_speaker = woke_stts[-1].get("speaker") if woke_stts else None
             if SELF_CORR_RE.search(raw_txt) or USER_CORR_RE.search(last_stt):
                 prev_q = woke_stts[-2]["text"] if len(woke_stts) >= 2 else ""
                 wrong_a = tts_turns[-1].get("spoken", "") if tts_turns else ""
@@ -168,9 +259,10 @@ def audit(**rec):
         with open(AUDIT_LOG, "a") as f:
             f.write(json.dumps({"ts": ts, **rec}) + "\n")
         if rec.get("kind") == "tts" and raw_txt:
-            post_voice_companion_to_discord(last_stt, raw_txt, last_arm, last_feat)
+            post_voice_companion_to_discord(last_stt, raw_txt, last_arm, last_feat, last_speaker)
     except OSError:
         pass
+    return last_stt
 
 
 def speakable(text: str) -> str:
@@ -224,12 +316,13 @@ def main():
     if not text:
         return
     raw, text = text, speakable(text)
-    audit(kind="tts", raw=raw, spoken=text)
+    last_q = audit(kind="tts", raw=raw, spoken=text)
     if not text:
         return
-    if run_socket_client(text, os.path.abspath(args.output), args.voice, args.speed):
-        return
-    run_in_process(text, args.output, args.voice, args.speed)
+    out_abs = os.path.abspath(args.output)
+    if not run_socket_client(text, out_abs, args.voice, args.speed):
+        run_in_process(text, out_abs, args.voice, args.speed)
+    notify_alfred_bridge(last_q, raw, out_abs)
 
 
 if __name__ == "__main__":

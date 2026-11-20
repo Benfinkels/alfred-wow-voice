@@ -1,0 +1,20 @@
+FROM ./alfred-v2-q4_k_m.gguf
+
+TEMPLATE """{{- range $i, $_ := .Messages }}
+{{- $last := eq (len (slice $.Messages $i)) 1 }}
+{{- if eq .Role "system" }}<|turn>system
+{{ .Content }}<turn|>
+{{ else if eq .Role "user" }}<|turn>user
+{{ .Content }}<turn|>
+{{ if $last }}<|turn>model
+{{ end }}
+{{- else if eq .Role "assistant" }}<|turn>model
+{{ .Content }}{{ if not $last }}<turn|>
+{{ end }}
+{{- end }}
+{{- end }}"""
+
+PARAMETER stop "<turn|>"
+PARAMETER stop "<|turn>"
+PARAMETER temperature 0.2
+PARAMETER num_ctx 4096

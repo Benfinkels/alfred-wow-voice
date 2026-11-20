@@ -30,11 +30,19 @@ def main():
     opts.inter_op_num_threads = 1
     opts.execution_mode = rt.ExecutionMode.ORT_SEQUENTIAL
 
-    sess = rt.InferenceSession(MODEL_PATH, sess_options=opts, providers=["CPUExecutionProvider"])
-    kokoro = Kokoro(MODEL_PATH, VOICES_PATH)
-    kokoro.sess = sess
+    cuda_opts = {
+        "gpu_mem_limit": int(os.environ.get("KOKORO_GPU_MEM_MB", "2048")) * 1024 * 1024,
+        "arena_extend_strategy": "kSameAsRequested",
+    }
+    providers = (
+        [("CUDAExecutionProvider", cuda_opts), "CPUExecutionProvider"]
+        if "CUDAExecutionProvider" in rt.get_available_providers()
+        else ["CPUExecutionProvider"]
+    )
+    sess = rt.InferenceSession(MODEL_PATH, sess_options=opts, providers=providers)
+    kokoro = Kokoro.from_session(sess, VOICES_PATH)
     kokoro.create("Warmup.", voice="bm_george", speed=1.05)
-    print(f"kokoro daemon ready ({THREADS} threads)", flush=True)
+    print(f"kokoro daemon ready (providers={sess.get_providers()}, threads={THREADS})", flush=True)
 
     if os.path.exists(SOCKET_PATH):
         os.unlink(SOCKET_PATH)

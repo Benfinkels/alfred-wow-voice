@@ -128,6 +128,10 @@ def patch():
         ) + ack_hook
         vr_src = vr_src.replace("\t} else {\n\t\tconst prompt = formatVoiceIngressPrompt", fast_hook + "\t\tconst prompt = formatVoiceIngressPrompt")
     vr_src = vr_src.replace(
+        '\tconst { text: transcript, processing, unavailable } = await transcribeVoiceAudio({\n\t\tcfg: params.cfg,\n\t\tagentId: entry.route.agentId,\n\t\tfilePath: wavPath\n\t});',
+        '\t/* ALFRED_SPEAKER_META_PATCH */\n\ttry { (await import("node:fs")).writeFileSync(wavPath + ".meta.json", JSON.stringify({ userId, speakerLabel, guildId: entry.guildId, channelId: entry.channelId })); } catch {}\n\tconst { text: transcript, processing, unavailable } = await transcribeVoiceAudio({\n\t\tcfg: params.cfg,\n\t\tagentId: entry.route.agentId,\n\t\tfilePath: wavPath\n\t});\n\ttry { (await import("node:fs")).unlinkSync(wavPath + ".meta.json"); } catch {}',
+    )
+    vr_src = vr_src.replace(
         "\tparams.enqueuePlayback(entry, async () => {\n\t\ttry {\n\t\t\tif (entry.sessionLifecycle.status === \"stopped\") return;",
         "\tparams.enqueuePlayback(entry, async () => {\n\t\ttry {\n\t\t\tif (entry.sessionLifecycle.status === \"stopped\") return;\n\t\t\tif ((globalThis.__alfredLastInterruptTs ?? 0) > __turnStartedAt) return;",
     )
@@ -154,6 +158,7 @@ def patch():
 
     required = [
         "ALFRED_ACK_PATCH",
+        "ALFRED_SPEAKER_META_PATCH",
         "const __turnStartedAt = Date.now();",
         "__alfredLastInterruptTs",
         "ALFRED_INTERRUPT_PATCH",

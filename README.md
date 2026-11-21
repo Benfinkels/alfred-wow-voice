@@ -91,6 +91,10 @@ kokoro-tts --output <wav>
 
 ## Measured Latency & Footprint
 
+![alfred-wow-voice Production Telemetry across 8,140 Live Discord Utterances](docs/voice_latency_telemetry.png)
+
+*Measured across `8,140` live Discord voice utterances: **99.1% (`8,070`) filtered locally at `$0`**, warm `faster-whisper` STT median **`521 ms`** (`p95: 614 ms`), and GPU Kokoro TTS cutting long-paragraph synthesis `6.6x` (`5,770 ms -> 598–876 ms`).*
+
 | Stage | Hardware / Model | Warm Latency | Cost |
 | :--- | :--- | :--- | :--- |
 | **STT (`whisper_daemon.py`)** | GTX 1080 8GB (`int8`, `distil-large-v3` + WoW `hotwords`) | `350–520 ms` | `$0` |
